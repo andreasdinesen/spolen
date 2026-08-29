@@ -8,16 +8,73 @@
  * PushManager, og et ubetinget kald ville kaste ved hver indlaesning (§4).
  * Derfor siger fladen det HOEJT frem for at vise en knap, der ikke kan virke.
  */
+/*
+ * Hvorfor kan der IKKE sendes notifikationer her?
+ *
+ * Tre grunde, og de kraever hver sit svar. Foerste udgave slog dem sammen
+ * til "notifications need https" - og den besked stod paa en iPhone, der
+ * var paa https og paa sit eget domaene (Andreas, 2026-08-29). En
+ * fejlbesked, der peger paa noget, brugeren allerede har gjort, er vaerre
+ * end ingen.
+ */
+function pushHindring() {
+  if (state.config && state.config.secureContext === false) {
+    return {
+      grund: 'https',
+      tekst: 'Notifications need https. Open spolen on its own domain instead of the '
+        + 'panel’s IP address.',
+    };
+  }
+  /*
+   * iOS udstiller hverken Notification eller PushManager i en almindelig
+   * Safari-fane. De findes KUN, naar siden er lagt paa hjemmeskaermen.
+   * `navigator.standalone` er Apples eget flag for netop det.
+   */
+  const erIos = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const paaHjemmeskaerm = window.navigator.standalone === true
+    || window.matchMedia('(display-mode: standalone)').matches;
+  if (erIos && !paaHjemmeskaerm) {
+    return {
+      grund: 'ios',
+      tekst: 'On iPhone and iPad, Safari only allows notifications when the site is '
+        + 'added to the Home Screen.',
+      trin: [
+        'Tap the Share button in Safari (the square with an arrow).',
+        'Choose "Add to Home Screen" and confirm.',
+        'Open spolen from the new icon — not from Safari.',
+        'Come back here and the button appears.',
+      ],
+    };
+  }
+  if (!('Notification' in window) || !('serviceWorker' in navigator)
+      || !('PushManager' in window)) {
+    return {
+      grund: 'browser',
+      tekst: 'This browser does not support web push. Chrome, Edge, Firefox and Safari '
+        + 'all do — on iPhone only from the Home Screen.',
+    };
+  }
+  return null;
+}
+
 function notifikationAfsnit() {
   const n = state.push;
-  const kanTeknisk = 'Notification' in window && 'serviceWorker' in navigator
-    && 'PushManager' in window;
+  const hindring = pushHindring();
 
-  if (!kanTeknisk || (state.config && !state.config.secureContext)) {
+  if (hindring) {
     return el('div', {}, [
-      el('p', { class: 'dim', text:
-        'Notifications need https. Open spolen on its own domain instead of the '
-        + 'panel’s IP address, and this section becomes available.' }),
+      el('p', { class: 'dim', text: hindring.tekst }),
+      hindring.trin
+        ? el('ol', { class: 'dim lille' }, hindring.trin.map((t) => el('li', { text: t })))
+        : null,
+      // Er der allerede abonnementer fra ANDRE enheder, skal de stadig
+      // kunne ses og fjernes herfra.
+      n.abon.length
+        ? el('p', { class: 'dim lille', text:
+            `${n.abon.length} other device${n.abon.length === 1 ? '' : 's'} already `
+            + 'subscribed.' })
+        : null,
     ]);
   }
 
