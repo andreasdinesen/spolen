@@ -103,3 +103,46 @@ test('zonen kvitterer med filnavnet, mens filen laeses', () => {
     `${returns} tidlige returns + 1 afslutning, men laeser ryddes ${rydninger} `
     + 'steder - en sti efterlader "Reading ..." staaende for evigt');
 });
+
+/*
+ * Et valg, brugeren ikke kan besvare.
+ *
+ * Andreas, 2026-08-29: "hvad skal jeg vaelge i dates are?" Hans Trakt-zip
+ * har dateOrder 'iso', og den vaerdi findes ikke blandt select'ens to
+ * muligheder ('dmy'/'mdy'). En <select> sat til en ukendt vaerdi faar
+ * selectedIndex = -1 og staar TOM. Han blev altsaa bedt om at traeffe et
+ * valg, der hverken kunne besvares eller betoed noget - tolkDato() matcher
+ * ISO foer skraastregs-grenen.
+ */
+test('ISO-filer stiller ikke et tomt datovalg', () => {
+  const start = KILDE.indexOf('function analyseKort(');
+  assert.notStrictEqual(start, -1, 'analyseKort findes ikke laengere');
+  const slut = KILDE.indexOf('\nfunction ', start + 10);
+  const krop = KILDE.slice(start, slut === -1 ? undefined : slut);
+
+  assert.match(krop, /const isoFil = a\.dateOrder === 'iso'/,
+    'ISO-filer skelnes ikke fra tvetydige - saa staar valget tomt igen');
+  assert.match(krop, /isoFil\s*\n?\s*\?/,
+    'isoFil bruges ikke til at vaelge mellem besked og dropdown');
+
+  // Vaerdien maa ALDRIG saettes til noget, der ikke findes som <option>.
+  assert.ok(!/ordenValg\.value = state\.import\.dateOrder \|\| a\.dateOrder/.test(krop),
+    'select\'en saettes stadig til en vaerdi, der kan vaere ukendt (fx "iso")');
+  assert.match(krop, /=== 'dmy' \|\| \w+ === 'mdy'\) \? \w+ : 'dmy'/,
+    'der er ingen reserve, hvis den oenskede orden ikke findes blandt mulighederne');
+});
+
+test('datovalget kan ikke aendre ISO-datoer', () => {
+  const { tolkDato } = require('../app/shared/import.js');
+  const iso = '2024-03-11T20:15:00.000Z';
+  const dmy = tolkDato(iso, 'dmy');
+  const mdy = tolkDato(iso, 'mdy');
+  assert.strictEqual(dmy, mdy,
+    'et datovalg aendrer ISO-datoer - saa ER valget farligt og skal vises');
+  assert.strictEqual(new Date(dmy * 1000).toISOString().slice(0, 10), '2024-03-11');
+
+  // Og modsat: for skraastregs-datoer SKAL valget stadig betyde noget,
+  // ellers har vi skjult et valg, der faktisk var noedvendigt.
+  assert.notStrictEqual(tolkDato('03/02/2022', 'dmy'), tolkDato('03/02/2022', 'mdy'),
+    'valget betyder intet for tvetydige datoer - saa er der en anden fejl');
+});

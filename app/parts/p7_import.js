@@ -52,12 +52,31 @@ function flertal(n, ental, flertalsform) {
 
 function analyseKort(a) {
   const usikker = !a.dateOrderCertain;
+
+  /*
+   * En Trakt-eksport baerer fulde tidsstempler (2024-03-11T20:15:00Z). Der
+   * er intet at vaelge, og der SKAL ikke vaelges: tolkDato() matcher ISO
+   * foer skraastregs-grenen, saa 'dmy'/'mdy' roerer ikke den slags datoer.
+   *
+   * Foer viste vi valget alligevel. Vaerdien 'iso' findes ikke blandt de to
+   * muligheder, og en <select> sat til en ukendt vaerdi bliver TOM - saa
+   * Andreas stod med et blankt felt og spurgte, hvad han skulle vaelge
+   * (2026-08-29). Et valg, der hverken kan besvares eller betyder noget, er
+   * vaerre end intet valg.
+   */
+  const isoFil = a.dateOrder === 'iso';
+
   const ordenValg = el('select', { style: 'font-size:16px' }, [
     el('option', { value: 'dmy', text: 'Day/month/year (3/2 = 3 February)' }),
     el('option', { value: 'mdy', text: 'Month/day/year (3/2 = 2 March)' }),
   ]);
-  ordenValg.value = state.import.dateOrder || a.dateOrder;
-  ordenValg.addEventListener('change', () => { state.import.dateOrder = ordenValg.value; });
+  if (!isoFil) {
+    const oenske = state.import.dateOrder || a.dateOrder;
+    // Kun en vaerdi, der FINDES blandt mulighederne - ellers staar den tom igen.
+    ordenValg.value = (oenske === 'dmy' || oenske === 'mdy') ? oenske : 'dmy';
+    state.import.dateOrder = ordenValg.value;
+    ordenValg.addEventListener('change', () => { state.import.dateOrder = ordenValg.value; });
+  }
 
   return el('div', { class: 'card importsvar' }, [
     el('h3', { text: a.formatName }),
@@ -93,15 +112,19 @@ function analyseKort(a) {
      * usikker, siges det med rene ord, for 3/2 er tvetydig, og en historik
      * med baglaens datoer er umulig at opdage bagefter.
      */
-    el('div', { class: usikker ? 'card advarsel' : '' }, [
-      el('p', { class: 'lille', text: usikker
-        ? 'Every date in this file is ambiguous (all numbers are 12 or lower), '
-          + 'so spolen cannot tell which way round they are. Check this before importing.'
-        : 'The file itself shows which way the dates run.' }),
-      el('div', { class: 'formgrid' }, [
-        el('label', { text: 'Dates are' }), ordenValg,
-      ]),
-    ]),
+    isoFil
+      ? el('p', { class: 'dim lille', text:
+          'This export carries full timestamps, so the dates are already exact — '
+          + 'there is nothing to choose.' })
+      : el('div', { class: usikker ? 'card advarsel' : '' }, [
+          el('p', { class: 'lille', text: usikker
+            ? 'Every date in this file is ambiguous (all numbers are 12 or lower), '
+              + 'so spolen cannot tell which way round they are. Check this before importing.'
+            : 'The file itself shows which way the dates run.' }),
+          el('div', { class: 'formgrid' }, [
+            el('label', { text: 'Dates are' }), ordenValg,
+          ]),
+        ]),
 
     el('h4', { text: 'First rows, as spolen understood them' }),
     el('div', { class: 'liste' }, (a.sample || []).map((r) => el('div', { class: 'item-row' }, [
