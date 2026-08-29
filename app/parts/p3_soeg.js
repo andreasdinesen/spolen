@@ -176,8 +176,8 @@ function tmdbRaekke(r) {
      * finde ud af, at det var den forkerte "Harry Hole" (Andreas, 2026-08-28).
      */
     class: 'omni-row', role: 'button', tabindex: '0',
-    onclick: () => visOverblik(r),
-    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); visOverblik(r); } },
+    onclick: () => aabnTraeffer(r),
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); aabnTraeffer(r); } },
   }, [
     miniPlakat(r.posterPath),
     el('div', { class: 'omni-row-main' }, [
@@ -187,6 +187,25 @@ function tmdbRaekke(r) {
     ]),
     knap,
   ]);
+}
+
+/*
+ * Hvad et klik paa en traeffer skal goere.
+ *
+ * Har man den ALLEREDE, er overblikket det forkerte svar: man kender jo
+ * filmen - man vil ind paa dens side og markere den set eller se, hvor den
+ * kan streames. Overblikket er til dem, man overvejer (Andreas, 2026-08-29).
+ */
+function aabnTraeffer(r) {
+  if (r.tracked) {
+    luk();
+    const felt = omniFelt();
+    if (felt) felt.value = '';
+    state.soeg.q = '';
+    aabnTitel(r.id);
+    return;
+  }
+  visOverblik(r);
 }
 
 /* ------------------------------------------------------------- overblik */

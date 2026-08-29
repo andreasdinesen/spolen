@@ -1292,7 +1292,11 @@ textarea.input { resize: vertical; min-height: 90px; font-family: inherit; }
      soegeikonet (det goer den i Sagu). */
   body.rullet .topbar { padding-top: 8px; padding-left: 52px; }
 
-  .omni-input { font-size: 16px; padding: 16px 18px 16px 48px; }
+  /* .omni-input stod her med padding 16px 18px 16px 48px. Maalt paa 375px:
+     der kom 12px 14px ud, fordi en senere .omni-input-blok overskrev den -
+     og de 48px venstre var plads til et .omni-icon, der ikke findes i
+     spolen. En regel, der lover noget den ikke leverer, er vaerre end ingen
+     regel: den naeste, der laeser CSS'en, tror den gaelder (2026-08-29). */
 
   /*
    * 16 px paa ALLE felter, ikke kun soegefeltet.
@@ -2204,15 +2208,32 @@ a.item-flag:hover { color: var(--accent); }
 }
 .omni-card:focus-within { border-color: var(--accent); box-shadow: var(--shadow-lift); }
 
+/*
+ * Soegefeltets tekst.
+ *
+ * `font: inherit` er en KORTFORM, og den nulstiller ogsaa line-height til
+ * kroppens (1.5 = 24px ved 16px skrift). Et input, hvis linjeboks er hoejere
+ * end selve skriften, tegner paa iOS en markoer i HELE linjeboksens hoejde,
+ * forankret i toppen - og saa staar den skaevt over teksten. Det var praecis,
+ * hvad Andreas saa paa sin iPhone (2026-08-29).
+ *
+ * Derfor en egen line-height EFTER kortformen. 16 x 1.25 = 20px, og med 14px
+ * luft i begge ender bliver feltet 48px hoejt - noejagtig som foer.
+ *
+ * De 16px er ikke pynt: iOS zoomer ind, saa snart et felt med mindre skrift
+ * faar fokus.
+ */
 .omni-input {
   width: 100%;
   border: 0;
   background: transparent;
   color: var(--text);
-  padding: 12px 14px;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.25;
+  padding: 14px;
   border-radius: var(--r);
   outline: none;
-  font: inherit;
 }
 .omni-input::placeholder { color: var(--muted); }
 

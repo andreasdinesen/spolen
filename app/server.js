@@ -45,7 +45,7 @@ const importer = require('./shared/import.js');
 const statistik = require('./shared/statistik.js');
 // Samme navneregel som fladen - shared/navn.js laegges ogsaa ind i app.js
 // af build_rune.py, saa der findes ÉN definition (2026-08-29).
-const { visNavn } = require('./shared/navn.js');
+const { visNavn, findTitler } = require('./shared/navn.js');
 const trakt = require('./trakt.js');
 const plex = require('./plex.js');
 const mcpModul = require('./mcp.js');
@@ -1966,11 +1966,29 @@ function gemTitel(t) {
  * igen, den dag det ikke passer.
  */
 function soegLokalt(userId, tekst, graense) {
-  const q = `%${String(tekst || '').trim().toLowerCase()}%`;
-  const rows = db.prepare(`
-    SELECT t.* FROM titles t
-     WHERE lower(t.name) LIKE ?
-     ORDER BY t.name LIMIT ?`).all(q, Math.min(Number(graense) || 20, 50));
+  const raa = String(tekst || '').trim();
+  const loft = Math.min(Number(graense) || 20, 50);
+  if (!raa) return [];
+
+  /*
+   * TO trin, fordi `titles.data` er en hel TMDB-post pr. titel.
+   *
+   * Et `SELECT *` over hele tabellen ville traekke hundredvis af JSON-blobs
+   * ind i hukommelsen ved hver eneste tastetryk - praecis de megabytes i en
+   * liste, Kokkeri laerte at holde ude (§4). Derfor: hent kun id og navn,
+   * find kandidaterne, og hent saa de faa raekker helt.
+   */
+  const lette = db.prepare('SELECT id, name FROM titles').all();
+  // Selve MATCHNINGEN ligger i shared/, hvor en proeve kan naa den.
+  const traf = findTitler(lette, raa, loft);
+  if (!traf.length) return [];
+
+  const ider = traf.map((r) => r.id);
+  const huller = ider.map(() => '?').join(',');
+  const fundne = db.prepare(`SELECT t.* FROM titles t WHERE t.id IN (${huller})`).all(...ider);
+  // IN() giver ingen orden - laeg raekkerne tilbage i den, sorteringen valgte.
+  const efterId = new Map(fundne.map((r) => [r.id, r]));
+  const rows = ider.map((id) => efterId.get(id)).filter(Boolean);
   const mine = new Set(hentItems(userId, { kind: 'tracking' }).map((x) => x.titleId));
   return rows.map((row) => Object.assign(JSON.parse(row.data), {
     id: row.id, kind: row.kind, tmdbId: row.tmdb_id, name: row.name,
