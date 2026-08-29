@@ -308,7 +308,13 @@ function opret(srv) {
     if (!auth) {
       res.writeHead(401, {
         'Content-Type': 'application/json',
-        'WWW-Authenticate': 'Bearer realm="spolen"',
+        /*
+         * WWW-Authenticate er HELE indgangen til OAuth: uden
+         * resource_metadata kan claude.ai ikke finde autorisationsserveren
+         * og opgiver forbindelsen (RFC 9728).
+         */
+        'WWW-Authenticate': srv.oauthUdfordring
+          ? srv.oauthUdfordring(req) : 'Bearer realm="spolen"',
       });
       res.end(JSON.stringify({ error: 'invalid_key',
         message: 'Send a valid spolen access key as "Authorization: Bearer spolen_…".' }));

@@ -2469,3 +2469,25 @@ body.navopen .backdrop {
   z-index: 45;
   background: rgba(0, 0, 0, .45);
 }
+
+/* ---- Hjaelp ---- */
+.medhjaelp { display: flex; align-items: center; gap: 8px; }
+.hjaelpknap {
+  width: 22px; height: 22px; flex: none;
+  border-radius: 50%; border: 1px solid var(--border);
+  background: var(--card); color: var(--muted);
+  font: 600 13px/1 inherit; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.hjaelpknap:hover { border-color: var(--accent); color: var(--accent-text); }
+.hjaelp {
+  border: 1px solid var(--accent); border-radius: var(--r);
+  padding: 14px 16px; margin: 10px 0 16px; background: var(--card);
+}
+.hjaelp h4 { margin: 0 0 8px; }
+.hjaelp ol { margin: 0 0 10px; padding-left: 20px; }
+.hjaelp li { margin-bottom: 6px; }
+.hjaelp a { color: var(--accent-text); word-break: break-all; }
+
+.webhookboks { border-top: 1px solid var(--border-soft); margin-top: 16px; padding-top: 8px; }
+.webhookboks h4 { margin: 0 0 4px; }

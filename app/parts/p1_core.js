@@ -11,7 +11,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 1;
+const APP_VERSION = 2;
 
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
@@ -39,8 +39,9 @@ const state = {
   tjenester: { hentet: false, fejl: '', region: 'DK', providers: [], mine: [] },
   stats: { hentet: false, fejl: '', data: null },
   trakt: { kode: null, url: '', fejl: '', besked: '' },
-  plex: { url: '', token: '', accountId: '', svar: null, fejl: '' },
+  plex: { url: '', token: '', accountId: '', svar: null, fejl: '', webhook: null },
   noegler: { liste: [], ny: null },
+  hjaelp: null,
   settings: {},
   delte: {},
   tmdb: { besked: '' },

@@ -14,7 +14,8 @@ function settingsSide() {
   return el('div', {}, [
     el('h1', { text: 'Settings' }),
 
-    el('h2', { text: 'Metadata' }),
+    afsnitshoved('Metadata', 'tmdb'),
+    hjaelpePanel('tmdb'),
     admin ? tmdbAfsnit() : el('p', { class: 'dim', text:
       'Only the administrator can change the TMDB key.' }),
 
@@ -27,6 +28,13 @@ function settingsSide() {
     importSide(),
 
     noegleAfsnit(),
+
+    admin ? afsnitshoved('Trakt application', 'trakt') : null,
+    admin ? hjaelpePanel('trakt') : null,
+    admin ? traktAppAfsnit() : null,
+
+    afsnitshoved('Access keys', 'noegler'),
+    hjaelpePanel('noegler'),
 
     admin ? el('h2', { text: 'This server' }) : null,
     admin ? serverAfsnit() : null,
@@ -72,7 +80,13 @@ function tmdbAfsnit() {
             // formularfelt, ryger med i browserens autofyld og i et screenshot.
             felt.value = '';
             toast('Key saved. Testing it…');
-            await tjekTmdb();
+            /*
+             * Tjenestelisten skal hentes IGEN. Den fejlede, foer noeglen var
+             * der, og fejlen bliver staaende i state - saa staar der "No TMDB
+             * key yet" lige under en linje, der siger at noeglen virker
+             * (Andreas, 2026-08-29).
+             */
+            await Promise.all([tjekTmdb(), hentTjenester()]);
             tegnSide();
           } catch (err) {
             toast(err.message, 'fejl');

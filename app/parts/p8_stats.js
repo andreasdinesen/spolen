@@ -185,8 +185,9 @@ async function hentStats() {
  */
 function noegleAfsnit() {
   const n = state.noegler;
+  // Overskriften kommer FRA settingssiden (med "?"-knappen). Havde den ogsaa
+  // staaet her, ville "Access keys" staa to gange - maalt 2026-08-29.
   return el('div', {}, [
-    el('h2', { text: 'Access keys' }),
     el('p', { class: 'dim lille', text:
       'For iOS Shortcuts, Claude and anything else outside the browser. '
       + 'A key belongs to you alone and sees only your library.' }),

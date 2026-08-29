@@ -12,7 +12,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 1;
+const APP_VERSION = 2;
 
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
@@ -40,8 +40,9 @@ const state = {
   tjenester: { hentet: false, fejl: '', region: 'DK', providers: [], mine: [] },
   stats: { hentet: false, fejl: '', data: null },
   trakt: { kode: null, url: '', fejl: '', besked: '' },
-  plex: { url: '', token: '', accountId: '', svar: null, fejl: '' },
+  plex: { url: '', token: '', accountId: '', svar: null, fejl: '', webhook: null },
   noegler: { liste: [], ny: null },
+  hjaelp: null,
   settings: {},
   delte: {},
   tmdb: { besked: '' },
@@ -311,7 +312,7 @@ function skal(indhold) {
         if (s.id === 'library') { await hentBibliotek(); tegnSide(); }
         // Noeglens tilstand hentes, naar man aabner siden - ikke ved login.
         // Det er et rigtigt TMDB-kald, og det skal ikke koere hver gang.
-        if (s.id === 'settings') { await Promise.all([hentSettings(), tjekTmdb(), hentTjenester(), hentNoegler()]); tegnSide(); }
+        if (s.id === 'settings') { await Promise.all([hentSettings(), tjekTmdb(), hentTjenester(), hentNoegler(), hentPlexWebhook()]); tegnSide(); }
         if (s.id === 'calendar') { await hentKalender(); tegnSide(); }
         if (s.id === 'stats') { await hentStats(); tegnSide(); }
         // Paa en telefon skal menuen lukke sig selv, naar man har valgt.
@@ -974,7 +975,8 @@ function settingsSide() {
   return el('div', {}, [
     el('h1', { text: 'Settings' }),
 
-    el('h2', { text: 'Metadata' }),
+    afsnitshoved('Metadata', 'tmdb'),
+    hjaelpePanel('tmdb'),
     admin ? tmdbAfsnit() : el('p', { class: 'dim', text:
       'Only the administrator can change the TMDB key.' }),
 
@@ -987,6 +989,13 @@ function settingsSide() {
     importSide(),
 
     noegleAfsnit(),
+
+    admin ? afsnitshoved('Trakt application', 'trakt') : null,
+    admin ? hjaelpePanel('trakt') : null,
+    admin ? traktAppAfsnit() : null,
+
+    afsnitshoved('Access keys', 'noegler'),
+    hjaelpePanel('noegler'),
 
     admin ? el('h2', { text: 'This server' }) : null,
     admin ? serverAfsnit() : null,
@@ -1032,7 +1041,13 @@ function tmdbAfsnit() {
             // formularfelt, ryger med i browserens autofyld og i et screenshot.
             felt.value = '';
             toast('Key saved. Testing it…');
-            await tjekTmdb();
+            /*
+             * Tjenestelisten skal hentes IGEN. Den fejlede, foer noeglen var
+             * der, og fejlen bliver staaende i state - saa staar der "No TMDB
+             * key yet" lige under en linje, der siger at noeglen virker
+             * (Andreas, 2026-08-29).
+             */
+            await Promise.all([tjekTmdb(), hentTjenester()]);
             tegnSide();
           } catch (err) {
             toast(err.message, 'fejl');
@@ -1797,6 +1812,60 @@ async function poll() {
   } catch { /* en afbrudt polling er ikke vaerd at larme om */ }
 }
 
+/* ------------------------------------------------- trakt-appens noegler */
+
+/*
+ * Client id og secret for den Trakt-APP, hele installationen bruger.
+ *
+ * De MANGLEDE helt i foerste udgave: fejlbeskeden sagde "an administrator
+ * adds one under Settings", men der var intet felt at tilfoeje dem i, saa
+ * beskeden pegede paa det sted, brugeren allerede stod (Andreas, 2026-08-29).
+ *
+ * Adskilt fra selve forbindelsen nedenfor: app-noeglerne er husets, mens
+ * LOGINET er personligt - to i huset har hver sin Trakt-konto.
+ */
+function traktAppAfsnit() {
+  const sat = state.delte && state.delte.trakt_client_id;
+  const idFelt = el('input', {
+    type: 'text', spellcheck: 'false', style: 'font-size:16px',
+    value: sat || '',
+    placeholder: 'Client ID from trakt.tv',
+  });
+  const hemFelt = el('input', {
+    type: 'password', autocomplete: 'off', spellcheck: 'false', style: 'font-size:16px',
+    placeholder: sat ? 'A secret is saved — paste a new one to replace it' : 'Client Secret',
+  });
+
+  return el('div', {}, [
+    el('p', { class: 'dim lille', text:
+      'Register an app on trakt.tv once, for the whole household. '
+      + 'Press ? above for the exact steps — the redirect uri has to be a specific value.' }),
+    el('div', { class: 'formgrid' }, [
+      el('label', { text: 'Client ID' }), idFelt,
+      el('label', { text: 'Client Secret' }), hemFelt,
+      el('button', { class: 'btn primary', text: sat ? 'Replace' : 'Save', onclick: async (e) => {
+        const krop = {};
+        if (idFelt.value.trim()) krop.trakt_client_id = idFelt.value.trim();
+        if (hemFelt.value.trim()) krop.trakt_client_secret = hemFelt.value.trim();
+        if (!Object.keys(krop).length) { toast('Fill in at least one field.', 'fejl'); return; }
+        e.target.disabled = true;
+        try {
+          await api('/admin/settings', { method: 'PUT', body: krop });
+          // Hemmeligheden slippes fra hukommelsen, saa snart den er gemt.
+          hemFelt.value = '';
+          await hentSettings();
+          tegnSide();
+          toast('Saved. You can connect Trakt now.');
+        } catch (err) { toast(err.message, 'fejl'); }
+        e.target.disabled = false;
+      } }),
+    ]),
+    sat
+      ? el('p', { class: 'noeglestatus har', text: 'A Trakt application is configured.' })
+      : el('p', { class: 'noeglestatus mangler', text: 'No Trakt application yet.' }),
+  ]);
+}
+
 /* ---------------------------------------------------------- trakt-broen */
 
 /*
@@ -1813,7 +1882,8 @@ function traktAfsnit() {
   const forbundet = state.config && state.config.traktLinked;
 
   return el('div', {}, [
-    el('h3', { text: 'Trakt' }),
+    afsnitshoved('Trakt', 'trakt', 'h3'),
+    hjaelpePanel('trakt'),
     el('p', { class: 'dim lille', text:
       'Sequel syncs to Trakt, so connecting Trakt is the way to bring your Sequel '
       + 'history across without an export file.' }),
@@ -1944,7 +2014,8 @@ function plexAfsnit() {
   });
 
   return el('div', {}, [
-    el('h3', { text: 'Plex' }),
+    afsnitshoved('Plex', 'plex', 'h3'),
+    hjaelpePanel('plex'),
     el('p', { class: 'dim lille', text:
       'Plex is the only service that can tell spolen what you actually watched. '
       + 'Everything it finds is matched on Plex’s own ids, so it is exact — not guesswork.' }),
@@ -1976,6 +2047,7 @@ function plexAfsnit() {
       ? el('div', {}, [
           el('p', { class: 'noeglestatus har', text:
             'Connected. spolen checks for new plays every 10 minutes.' }),
+          plexWebhookAfsnit(),
           el('div', { class: 'knaprad' }, [
             el('button', { class: 'btn primary', text: 'Import everything from Plex',
               onclick: (e) => importerFraPlex(e.target, true) }),
@@ -2054,6 +2126,70 @@ async function importerFraPlex(knap, alt) {
     knap.textContent = gammel;
     toast(err.message, 'fejl');
   }
+}
+
+
+/* ---------------------------------------------------------- plex-webhook */
+
+/*
+ * Webhooken er en TILFOEJELSE, ikke fundamentet.
+ *
+ * Polling henter det samme med op til ti minutters forsinkelse. Webhooken
+ * goer det oejeblikkeligt - men den kraever Plex Pass, og adressen skal kunne
+ * naas FRA Plex-serveren. Begge dele staar i teksten, saa man ikke bruger en
+ * aften paa at finde ud af, at man ikke har Plex Pass.
+ */
+function plexWebhookAfsnit() {
+  const p = state.plex;
+  const fuld = p.webhook ? location.origin + p.webhook : '';
+  const felt = el('input', { readonly: true, value: fuld, style: 'font-size:16px',
+    onclick: (e) => e.target.select() });
+
+  return el('div', { class: 'webhookboks' }, [
+    el('h4', { text: 'Instant updates (optional)' }),
+    el('p', { class: 'dim lille', text:
+      'Plex can tell spolen the moment something finishes, instead of waiting for the '
+      + 'next check. It needs Plex Pass — without it the field exists but Plex never '
+      + 'sends anything.' }),
+    p.webhook
+      ? el('div', {}, [
+          el('div', { class: 'formgrid' }, [
+            el('label', { text: 'Webhook address' }), felt,
+            el('button', { class: 'btn ghost', text: 'Copy', onclick: async () => {
+              try { await navigator.clipboard.writeText(fuld); toast('Copied.'); }
+              catch { felt.select(); toast('Selected — press Cmd/Ctrl+C.', 'fejl'); }
+            } }),
+          ]),
+          el('p', { class: 'dim lille', text:
+            'Paste it under Plex → Settings → Webhooks. Your Plex server has to be able '
+            + 'to reach this address — if spolen is only on your own network, so is Plex.' }),
+          el('p', { class: 'dim lille', text:
+            'Anyone with this address can add entries to your history, so treat it like '
+            + 'a password.' }),
+          el('button', { class: 'btn ghost lille', text: 'Revoke address', onclick: async () => {
+            const svar = await spoerg('Revoke the webhook address?',
+              'Plex stops being able to report plays instantly. The 10-minute check keeps working.',
+              [{ id: 'ja', text: 'Revoke', primary: true }, { id: 'nej', text: 'Cancel' }]);
+            if (svar !== 'ja') return;
+            await api('/plex/webhook', { method: 'DELETE' });
+            state.plex.webhook = null;
+            tegnSide();
+          } }),
+        ])
+      : el('button', { class: 'btn ghost', text: 'Create webhook address', onclick: async (e) => {
+          e.target.disabled = true;
+          try {
+            const r = await api('/plex/webhook', { method: 'POST' });
+            state.plex.webhook = r.path;
+            tegnSide();
+          } catch (err) { e.target.disabled = false; toast(err.message, 'fejl'); }
+        } }),
+  ]);
+}
+
+async function hentPlexWebhook() {
+  try { state.plex.webhook = (await api('/plex/webhook')).path; }
+  catch { state.plex.webhook = null; }
 }
 
 /* ---- p8_stats.js ---- */
@@ -2244,8 +2380,9 @@ async function hentStats() {
  */
 function noegleAfsnit() {
   const n = state.noegler;
+  // Overskriften kommer FRA settingssiden (med "?"-knappen). Havde den ogsaa
+  // staaet her, ville "Access keys" staa to gange - maalt 2026-08-29.
   return el('div', {}, [
-    el('h2', { text: 'Access keys' }),
     el('p', { class: 'dim lille', text:
       'For iOS Shortcuts, Claude and anything else outside the browser. '
       + 'A key belongs to you alone and sees only your library.' }),
@@ -2334,4 +2471,125 @@ async function hentNoegler() {
   try {
     state.noegler.liste = (await api('/keys')).keys || [];
   } catch { state.noegler.liste = []; }
+}
+
+/* ---- p9_hjaelp.js ---- */
+
+/* ------------------------------------------------------------- hjaelp */
+
+/*
+ * "?"-knapper ved hver integration.
+ *
+ * Hver af dem kraever, at man henter en noegle et fremmed sted og forstaar,
+ * HVILKEN af flere noegler man skal bruge. Uden vejledningen er feltet bare
+ * et tomt felt, og fejlbeskeden "an administrator adds one under Settings"
+ * peger på et sted, brugeren allerede staar (Andreas, 2026-08-29).
+ *
+ * Teksten bor i koden og ikke i en ekstern wiki: den skal virke offline og
+ * foelge med runen, naar den installeres.
+ */
+const HJAELP = {
+  tmdb: {
+    titel: 'Getting a TMDB key',
+    url: 'https://www.themoviedb.org/settings/api',
+    trin: [
+      'Create a free account on themoviedb.org.',
+      'Open Settings → API and request a key. Choose "Developer"; it is free for personal use.',
+      'You are given two things: an API Key (32 characters) and an API Read Access Token (a long one starting with "ey").',
+      'Paste the Read Access Token — it travels in a header instead of in the address, so it never ends up in a log.',
+    ],
+    note: 'One key serves the whole household. Only an administrator can change it.',
+  },
+  trakt: {
+    titel: 'Connecting Trakt',
+    url: 'https://trakt.tv/oauth/applications/new',
+    trin: [
+      'Sign in on trakt.tv and open Settings → Your API Apps → New Application.',
+      'Give it any name, for example "spolen".',
+      'Under Redirect uri write: urn:ietf:wg:oauth:2.0:oob',
+      'Save, and copy the Client ID and Client Secret into the two fields here.',
+      'Then press Connect Trakt — you get a code to type on trakt.tv.',
+    ],
+    note: 'Sequel syncs to Trakt, so this is the way to bring a Sequel history across '
+      + 'without an export file. The client id and secret belong to the installation; '
+      + 'the login afterwards is personal, so everyone in the house connects their own account.',
+  },
+  plex: {
+    titel: 'Connecting Plex',
+    url: 'https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/',
+    trin: [
+      'The address is your own Plex server on your network, for example http://192.168.1.50:32400',
+      'The token is not a password. Open Plex in a browser, play something, then open the browser’s developer tools → Network and look for X-Plex-Token in any request.',
+      'Plex’s own guide (linked below) shows a second way through the XML view.',
+      'Press Test connection before saving — a wrong address just goes quiet otherwise.',
+    ],
+    note: 'Plex is the only service that can tell spolen what you actually watched. '
+      + 'Everything else is either an import or marked by hand.',
+  },
+  noegler: {
+    titel: 'Access keys and Claude',
+    url: null,
+    trin: [
+      'A key lets something outside the browser reach spolen: iOS Shortcuts, Claude Code, Claude Desktop.',
+      'Read means it can look but not change anything. Full also lets it mark things watched.',
+      'For Claude Code or Desktop, add spolen as an MCP server and send the key as a Bearer token.',
+      'For claude.ai on the web you do not need a key at all — add spolen as a connector and approve it in the browser.',
+    ],
+    note: 'The key is shown once. Only its hash is stored, so it cannot be looked up again.',
+  },
+  ical: {
+    titel: 'Subscribing in your calendar',
+    url: null,
+    trin: [
+      'Create the address here, then add it as a subscribed calendar.',
+      'On iPhone: Settings → Calendar → Accounts → Add Account → Other → Add Subscribed Calendar.',
+      'On a Mac: Calendar → File → New Calendar Subscription.',
+      'The calendar updates itself; spolen suggests every six hours.',
+    ],
+    note: 'The address is the secret — anyone who has it can see what you are watching. '
+      + 'Revoke it here if it gets out.',
+  },
+};
+
+/*
+ * Hjaelpen foldes ud PAA SIDEN og ikke i en modal.
+ *
+ * Man laeser den, mens man udfylder feltet ved siden af - en modal ville
+ * daekke praecis det felt, vejledningen handler om.
+ */
+function hjaelpeKnap(navn) {
+  return el('button', {
+    class: 'hjaelpknap',
+    'aria-label': `Help: ${HJAELP[navn].titel}`,
+    title: HJAELP[navn].titel,
+    onclick: () => {
+      state.hjaelp = state.hjaelp === navn ? null : navn;
+      tegnSide();
+    },
+  }, ['?']);
+}
+
+function hjaelpePanel(navn) {
+  if (state.hjaelp !== navn) return null;
+  const h = HJAELP[navn];
+  return el('div', { class: 'hjaelp' }, [
+    el('h4', { text: h.titel }),
+    el('ol', {}, h.trin.map((t) => el('li', { text: t }))),
+    h.note ? el('p', { class: 'dim lille', text: h.note }) : null,
+    h.url
+      ? el('p', {}, [
+          // target=_blank + rel: en fremmed side maa ikke kunne naa
+          // window.opener og sende brugeren videre.
+          el('a', { href: h.url, target: '_blank', rel: 'noopener noreferrer',
+            text: h.url.replace(/^https?:\/\//, '').slice(0, 58) + '…' }),
+        ])
+      : null,
+    el('button', { class: 'btn ghost lille', text: 'Close',
+      onclick: () => { state.hjaelp = null; tegnSide(); } }),
+  ]);
+}
+
+/** Overskrift med et "?" ved siden af. */
+function afsnitshoved(tekst, hjaelpNavn, niveau) {
+  return el(niveau || 'h2', { class: 'medhjaelp' }, [tekst, hjaelpeKnap(hjaelpNavn)]);
 }

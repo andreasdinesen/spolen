@@ -270,7 +270,81 @@ function noeglerAtSlaaOp(poster) {
   return [...ud];
 }
 
+/* ------------------------------------------------------------ webhook */
+
+/*
+ * Plex' webhooks sender multipart/form-data med ét felt, `payload`, der
+ * indeholder JSON - og somme tider et miniaturebillede ved siden af.
+ *
+ * Vi skriver laeseren selv. Den skal kun finde ÉT felt i en krop, vi selv
+ * har sat en graense for, og en npm-pakke til multipart ville vaere den
+ * foerste afhaengighed i hele projektet.
+ *
+ * Webhooks kraever Plex Pass. Uden dem henter polling det samme med ti
+ * minutters forsinkelse - webhooken er en tilfoejelse, ikke fundamentet.
+ */
+function laesMultipartFelt(krop, contentType, feltnavn) {
+  const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(String(contentType || ''));
+  if (!m) return null;
+  const graense = `--${(m[1] || m[2]).trim()}`;
+  const tekst = krop.toString('utf8');
+  for (const del of tekst.split(graense)) {
+    // Hoved og krop adskilles af en TOM linje. Findes den ikke, er delen
+    // enten afslutningsmarkoeren eller noget, vi ikke skal bruge.
+    const skil = del.indexOf('\r\n\r\n');
+    if (skil < 0) continue;
+    const hoved = del.slice(0, skil);
+    if (!new RegExp(`name="${feltnavn}"`, 'i').test(hoved)) continue;
+    // Afslut foer den afsluttende CRLF, som hoerer til graensen - ikke til
+    // vaerdien.
+    return del.slice(skil + 4).replace(/\r\n$/, '');
+  }
+  return null;
+}
+
+/**
+ * Plex-webhookens payload -> spolens importform.
+ *
+ * KUN `media.scrobble` regnes som "set". Plex sender ogsaa play, pause,
+ * resume og stop - og at markere noget set, fordi nogen trykkede afspil,
+ * ville fylde historikken med ting, der blev slukket efter to minutter.
+ * Plex sender selv scrobble ved ~90 % afspillet, og det er den beslutning,
+ * vi skal stole paa i stedet for at traeffe den igen.
+ */
+function oversaetWebhook(payload) {
+  if (!payload || payload.event !== 'media.scrobble') return null;
+  const m = payload.Metadata;
+  if (!m) return null;
+  const naar = Math.floor(Date.now() / 1000);
+  if (m.type === 'episode') {
+    return {
+      type: 'episode',
+      title: m.grandparentTitle || '',
+      year: Number(m.parentYear) || Number(m.year) || null,
+      ids: laesGuids([m.grandparentGuid, m.guid].filter(Boolean)),
+      season: Number.isFinite(Number(m.parentIndex)) ? Number(m.parentIndex) : null,
+      number: Number.isFinite(Number(m.index)) ? Number(m.index) : null,
+      watchedAt: naar, rating: null, kilde: 'plex',
+      // Hvem saa det - saa serveren kan afvise en webhook for en anden konto.
+      konto: (payload.Account && payload.Account.title) || null,
+    };
+  }
+  if (m.type === 'movie') {
+    return {
+      type: 'movie',
+      title: m.title || '',
+      year: Number(m.year) || null,
+      ids: laesGuids([m.guid].filter(Boolean)),
+      season: null, number: null,
+      watchedAt: naar, rating: null, kilde: 'plex',
+      konto: (payload.Account && payload.Account.title) || null,
+    };
+  }
+  return null;
+}
+
 module.exports = {
   PlexFejl, kald, tjekForbindelse, hentBiblioteker, hentKonti,
   hentHistorik, hentGuids, laesGuids, oversaetHistorik, noeglerAtSlaaOp,
+  laesMultipartFelt, oversaetWebhook,
 };

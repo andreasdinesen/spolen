@@ -113,6 +113,8 @@ const PERSONLIGE_SETTINGS = new Set([
   'plex_token',        // hemmelig - personlig, fordi hver bruger har sin egen konto
   'trakt_access_token',
   'trakt_refresh_token',
+  'plex_webhook_token',  // saettes server-side, aldrig af klienten
+  'plex_account_navn',   // Plex' webhook sender navn, ikke id
   'plex_last_sync',      // epoke for sidste hentede viewedAt
   'plex_account_id',     // hvilken Plex-konto der er BRUGERENS
 ]);
@@ -433,6 +435,39 @@ const MIGRATIONS = [
         revoked_at INTEGER
       );
       CREATE INDEX ix_ical_bruger ON ical_feeds(user_id) WHERE revoked_at IS NULL;
+    `);
+  },
+
+  function m6(d) {
+    /*
+     * OAuth 2.1 til claude.ai's connectors (§9a).
+     *
+     * Claude Code og Desktop kan sende en fast noegle i en header. WEBklienten
+     * kan ikke: den kender ikke serveren paa forhaand, saa den skal kunne
+     * registrere sig selv og sende brugeren gennem et login.
+     *
+     * Access-tokens faar IKKE deres egen tabel: de ligger i `tokens` med et
+     * client_id og et udloeb, saa de valideres ad PRAECIS samme vej som en
+     * haandlavet noegle. Én validering, ét sted at tilbagekalde, ét sted at
+     * rate-limite. Kolonnerne findes allerede fra m1.
+     */
+    d.exec(`
+      CREATE TABLE oauth_clients (
+        id            TEXT PRIMARY KEY,
+        name          TEXT NOT NULL,
+        redirect_uris TEXT NOT NULL,          -- JSON-array, matches NOEJAGTIGT
+        created_at    INTEGER NOT NULL
+      );
+      CREATE TABLE oauth_refresh (
+        hash       TEXT PRIMARY KEY,          -- sha256, aldrig klartekst
+        token_id   TEXT NOT NULL,
+        client_id  TEXT NOT NULL,
+        scope      TEXT NOT NULL,
+        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at INTEGER NOT NULL,
+        revoked_at INTEGER
+      );
+      CREATE INDEX ix_oauth_refresh_klient ON oauth_refresh(client_id) WHERE revoked_at IS NULL;
     `);
   },
 ];
@@ -2175,6 +2210,100 @@ async function koerOpdatering() {
   return opdaterStatus();
 }
 
+/* --------------------------------------------------------- plex-webhook */
+
+/**
+ * Webhook-adressen for én bruger. Oprettes foerst naar den bedes om.
+ *
+ * ADRESSEN er hemmeligheden - Plex kan ikke sende cookies, praecis som en
+ * kalender-app. Den kan tilbagekaldes ved at slette noeglen.
+ */
+function plexWebhookToken(userId, opret) {
+  const findes = getSetting(userId, 'plex_webhook_token', '');
+  if (findes) return findes;
+  if (!opret) return null;
+  const t = crypto.randomBytes(24).toString('base64url');
+  setSetting(userId, 'plex_webhook_token', t);
+  audit('plex-webhook-oprettet', userId, null);
+  return t;
+}
+
+function findPlexWebhook(raa) {
+  const r = db.prepare(
+    `SELECT scope FROM settings WHERE key = 'plex_webhook_token' AND value = ?`)
+    .get(String(raa || ''));
+  return r ? r.scope : null;
+}
+
+/**
+ * Tager imod én scrobble fra Plex.
+ *
+ * Kroppen laeses RAA (multipart), ikke som JSON. Loftet er lavt med vilje:
+ * Plex sender et miniaturebillede med, og vi vil kun have tekstfeltet.
+ */
+async function haandterPlexWebhook(req, res, token) {
+  const userId = findPlexWebhook(token);
+  // Forkert token giver 404, ikke 403 - samme regel som iCal-feedet: et 403
+  // ville bekraefte, at tokenet findes.
+  if (!userId || req.method !== 'POST') {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not found');
+    return;
+  }
+  const bidder = [];
+  let n = 0;
+  await new Promise((resolve, reject) => {
+    req.on('data', (b) => {
+      n += b.length;
+      if (n > 2 * 1024 * 1024) { req.destroy(); reject(new Error('for stor')); return; }
+      bidder.push(b);
+    });
+    req.on('end', resolve);
+    req.on('error', reject);
+  }).catch(() => null);
+
+  let payload = null;
+  try {
+    const felt = plex.laesMultipartFelt(Buffer.concat(bidder), req.headers['content-type'], 'payload');
+    payload = felt ? JSON.parse(felt) : null;
+  } catch { payload = null; }
+
+  const raekke = payload ? plex.oversaetWebhook(payload) : null;
+  /*
+   * Kvitter ALTID med 200, ogsaa naar vi ikke bruger begivenheden.
+   *
+   * Plex sender play, pause, resume, stop og rate ved siden af scrobble. Et
+   * fejlsvar paa dem ville faa Plex til at proeve igen og til sidst slaa
+   * webhooken fra - for noget, der virker som det skal.
+   */
+  if (!raekke) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}'); return; }
+
+  /*
+   * Er der valgt en Plex-konto, skal webhooken vaere FRA den konto. Uden
+   * tjekket ville en andens afspilning paa den samme server lande i din
+   * historik - og det er hele grunden til, at kontovalget findes.
+   */
+  const valgt = getSetting(userId, 'plex_account_id', '');
+  const valgtNavn = getSetting(userId, 'plex_account_navn', '');
+  if (valgt && valgtNavn && raekke.konto && raekke.konto !== valgtNavn) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('{"ok":true,"ignored":"other account"}');
+    return;
+  }
+
+  try {
+    // Én raekke ad gangen - webhooken er ikke et importjob og maa ikke
+    // blokere et, der koerer.
+    if (!importJob.koerer) {
+      await koerImportRaekker(userId, [raekke], 'Plex webhook', []);
+    }
+  } catch (err) {
+    log(`plex-webhook: ${err.message}`);
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end('{"ok":true}');
+}
+
 /* --------------------------------------------------------- plex-hentning */
 
 /**
@@ -2542,6 +2671,298 @@ async function koerImportRaekker(userId, raekker, formatNavn, sprunget) {
   return importStatus();
 }
 
+/* --------------------------------------------------------------- oauth */
+
+/**
+ * Udsteder et access- og et refresh-token.
+ *
+ * Access-tokenet lander i `tokens` med et client_id og et udloeb - SAMME
+ * tabel som de haandlavede noegler. Dermed valideres begge slags ad én vej,
+ * og der er ét sted at tilbagekalde og rate-limite.
+ */
+function udstedTokens(clientId, scope, userId) {
+  const adgang = opretToken(userId, `Connector ${clientId.slice(-8)}`, scope, {
+    clientId, expiresAt: now() + oauth.ADGANG_LEVETID,
+  });
+  const forny = crypto.randomBytes(32).toString('base64url');
+  db.prepare(`INSERT INTO oauth_refresh (hash, token_id, client_id, scope, user_id, created_at)
+              VALUES (?,?,?,?,?,?)`)
+    .run(hashToken(forny), adgang.id, clientId, scope, userId, now());
+  return {
+    access_token: adgang.key,
+    token_type: 'Bearer',
+    expires_in: oauth.ADGANG_LEVETID,
+    refresh_token: forny,
+    scope,
+  };
+}
+
+function findRefresh(raa) {
+  return db.prepare(
+    'SELECT client_id, scope, user_id FROM oauth_refresh WHERE hash = ? AND revoked_at IS NULL')
+    .get(hashToken(String(raa || ''))) || null;
+}
+
+function tilbagekaldRefresh(raa) {
+  db.prepare('UPDATE oauth_refresh SET revoked_at = ? WHERE hash = ? AND revoked_at IS NULL')
+    .run(now(), hashToken(String(raa || '')));
+}
+
+const oauth = require('./oauth.js').opret({
+  gemKlient(k) {
+    db.prepare('INSERT INTO oauth_clients (id, name, redirect_uris, created_at) VALUES (?,?,?,?)')
+      .run(k.id, k.name, k.redirect_uris, now());
+    audit('oauth-klient-registreret', k.name, null);
+  },
+  hentKlient(id) {
+    return db.prepare('SELECT id, name, redirect_uris FROM oauth_clients WHERE id = ?')
+      .get(String(id || '')) || null;
+  },
+  udstedTokens,
+  findRefresh,
+  tilbagekaldRefresh,
+});
+
+/* ------------------------------------------------------ samtykkesiden */
+
+function escHtml(t) {
+  return String(t === null || t === undefined ? '' : t)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/*
+ * Samtykkesiden har INGEN JavaScript.
+ *
+ * Det er ikke nostalgi: siden er den ene flade, hvor en fremmed klient sender
+ * brugeren hen, og en almindelig <form method="post"> med to submit-knapper
+ * kan ikke goere andet end det, den ser ud til. CSP'en kan derfor vaere
+ * strammere her end i selve appen (§9a).
+ */
+function oauthSide(titel, indhold) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escHtml(titel)} — spolen</title>
+<style>
+:root{color-scheme:light dark}
+body{font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;
+ display:flex;min-height:100vh;align-items:center;justify-content:center;
+ background:#141210;color:#f3efe9;padding:20px}
+.k{max-width:440px;width:100%;background:#1c1917;border:1px solid #33302c;
+ border-radius:14px;padding:26px}
+h1{font-size:1.25rem;margin:0 0 6px}
+p{color:#a9a19a}
+.n{color:#e8c07d;font-weight:600}
+ul{color:#a9a19a;padding-left:20px}
+form{display:flex;gap:10px;margin-top:20px}
+button{font:inherit;padding:10px 18px;border-radius:9px;border:1px solid #33302c;cursor:pointer}
+button.j{background:#e8c07d;color:#1c1917;border-color:transparent;font-weight:600}
+button.n2{background:transparent;color:#a9a19a}
+code{background:#26231f;padding:2px 6px;border-radius:5px;font-size:.9em}
+</style></head><body><div class="k">${indhold}</div></body></html>`;
+}
+
+function sendHtml(res, status, html) {
+  res.writeHead(status, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': Buffer.byteLength(html),
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    // Samtykkesiden maa ALDRIG kunne rammes ind: en usynlig iframe med et
+    // klik oveni ville vaere en tilladelse, brugeren aldrig gav.
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+  });
+  res.end(html);
+}
+
+async function haandterOauth(req, res, urlPath, query) {
+  /*
+   * FAELDE: de offentlige OAuth-ruter maa IKKE gennem securityHeaders().
+   *
+   * De skal have Access-Control-Allow-Origin: *, men
+   * Cross-Origin-Resource-Policy: same-origin faar browseren til at afvise
+   * svaret alligevel - og saa staar der intet i netvaerkspanelet at fejlsoege
+   * paa. (Dodas fælde 3.)
+   */
+  const cors = () => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization, mcp-protocol-version');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  };
+  const json = (status, krop) => {
+    cors();
+    const t = JSON.stringify(krop);
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+      'Content-Length': Buffer.byteLength(t) });
+    res.end(t);
+  };
+
+  if (req.method === 'OPTIONS') { cors(); res.writeHead(204); res.end(); return; }
+
+  /* -------- opdagelse: de to dokumenter, klienten finder rundt efter -------- */
+  if (urlPath === '/.well-known/oauth-protected-resource'
+      || urlPath === '/.well-known/oauth-protected-resource/mcp') {
+    json(200, oauth.beskyttetRessource(req));
+    return;
+  }
+  if (urlPath === '/.well-known/oauth-authorization-server') {
+    json(200, oauth.serverMetadata(req));
+    return;
+  }
+
+  /* -------------------------- dynamisk registrering -------------------------- */
+  if (urlPath === '/oauth/register') {
+    if (req.method !== 'POST') { json(405, { error: 'method_not_allowed' }); return; }
+    if (!rateAllow(`oauthreg:${clientIp(req)}`, 20, 3600)) {
+      json(429, { error: 'too_many_requests' });
+      return;
+    }
+    const krop = await readJsonBody(req, true);
+    const r = oauth.registrer(krop);
+    if (r.fejl) { json(400, { error: 'invalid_redirect_uri', error_description: r.fejl }); return; }
+    json(201, r.klient);
+    return;
+  }
+
+  /* -------------------------------- authorize -------------------------------- */
+  if (urlPath === '/oauth/authorize') {
+    /*
+     * POST behandles FOERST og validerer ud fra KROPPEN.
+     *
+     * Foerste udgave validerede `query` oeverst, uanset metode - men en POST
+     * baerer sine felter i kroppen, saa query var tom, og samtykket blev
+     * afvist med "Unknown client". Beskeden var sand om en tom
+     * foresproergsel og fuldstaendig vildledende om klienten.
+     */
+    if (req.method === 'POST') {
+      const bruger0 = sessionUser(req);
+      if (!bruger0) {
+        sendHtml(res, 403, oauthSide('Cannot continue',
+          '<h1>Cannot continue</h1><p>Your session ended. Sign in and try again.</p>'));
+        return;
+      }
+      /*
+       * Formularen er sidens EGEN CSRF-spaerre: den er den eneste flade i
+       * appen, der ikke kraever Content-Type: application/json, saa et
+       * fremmed site kunne ellers sende den. Derfor tjekkes Origin/Referer
+       * mod vores egen vaert.
+       */
+      const oprindelse = req.headers.origin || req.headers.referer || '';
+      const vaert = String(req.headers['x-forwarded-host'] || req.headers.host || '')
+        .split(',')[0].trim();
+      let egen = false;
+      try { egen = new URL(oprindelse).host === vaert; } catch { egen = false; }
+      if (!egen) {
+        sendHtml(res, 403, oauthSide('Cannot continue',
+          '<h1>Cannot continue</h1><p>That request did not come from spolen.</p>'));
+        return;
+      }
+
+      const krop = await readJsonBody(req, true);
+      const igen = oauth.tjekAutorisation(new URLSearchParams(krop));
+      if (igen.fejl) {
+        sendHtml(res, 400, oauthSide('Cannot continue',
+          `<h1>Cannot continue</h1><p>${escHtml(igen.fejl)}</p>`));
+        return;
+      }
+      if (krop.svar !== 'ja') {
+        const url = new URL(igen.redirect);
+        url.searchParams.set('error', 'access_denied');
+        if (igen.state) url.searchParams.set('state', igen.state);
+        res.writeHead(302, { Location: url.toString(), 'Cache-Control': 'no-store' });
+        res.end();
+        return;
+      }
+      audit('oauth-tilladelse', bruger0.username, igen.klient.name);
+      res.writeHead(302, {
+        Location: oauth.giveTilladelse(igen, bruger0.id),
+        'Cache-Control': 'no-store',
+      });
+      res.end();
+      return;
+    }
+    if (req.method !== 'GET') { json(405, { error: 'method_not_allowed' }); return; }
+
+    const oplysninger = oauth.tjekAutorisation(query);
+    if (oplysninger.fejl) {
+      sendHtml(res, 400, oauthSide('Cannot continue',
+        `<h1>Cannot continue</h1><p>${escHtml(oplysninger.fejl)}</p>`));
+      return;
+    }
+
+    const bruger = sessionUser(req);
+    if (!bruger) {
+      /*
+       * Ikke logget ind. Vi viser IKKE et login her - brugeren sendes til
+       * appens egen loginside med adressen at vende tilbage til. Ét sted at
+       * logge ind betyder ét sted, hvor kodeord haandteres.
+       */
+      sendHtml(res, 200, oauthSide('Sign in first', `
+        <h1>Sign in first</h1>
+        <p><span class="n">${escHtml(oplysninger.klient.name)}</span> wants access to your
+        spolen library. Sign in, then open this link again.</p>
+        <form method="get" action="/"><button class="j" type="submit">Open spolen</button></form>`));
+      return;
+    }
+
+    if (req.method === 'GET') {
+      const felter = ['client_id', 'redirect_uri', 'response_type', 'scope',
+        'code_challenge', 'code_challenge_method', 'state']
+        .map((n) => `<input type="hidden" name="${n}" value="${escHtml(query.get(n) || '')}">`)
+        .join('');
+      const maa = oplysninger.scope === 'read'
+        ? '<li>See your library, history and what is coming up</li>'
+        : '<li>See your library, history and what is coming up</li>'
+          + '<li>Mark things as watched and add titles</li>';
+      sendHtml(res, 200, oauthSide('Allow access', `
+        <h1>Allow access?</h1>
+        <p><span class="n">${escHtml(oplysninger.klient.name)}</span> is asking to connect to
+        spolen as <span class="n">${escHtml(bruger.username)}</span>.</p>
+        <p>It will be able to:</p><ul>${maa}</ul>
+        <p>It can never see other people's libraries, and you can revoke it at any time
+        under Settings → Access keys.</p>
+        <form method="post" action="/oauth/authorize">${felter}
+          <button class="j" type="submit" name="svar" value="ja">Allow</button>
+          <button class="n2" type="submit" name="svar" value="nej">Deny</button>
+        </form>`));
+      return;
+    }
+
+  }
+
+  /* ---------------------------------- token ---------------------------------- */
+  if (urlPath === '/oauth/token') {
+    if (req.method !== 'POST') { json(405, { error: 'method_not_allowed' }); return; }
+    if (!rateAllow(`oauthtok:${clientIp(req)}`, 60, 3600)) {
+      json(429, { error: 'slow_down' });
+      return;
+    }
+    const krop = await readJsonBody(req, true);
+    const type = krop.grant_type;
+    let r;
+    if (type === 'authorization_code') r = oauth.byttKode(krop);
+    else if (type === 'refresh_token') r = oauth.forny(krop);
+    else { json(400, { error: 'unsupported_grant_type' }); return; }
+    if (r.fejl) { json(400, { error: r.fejl }); return; }
+    json(200, r);
+    return;
+  }
+
+  if (urlPath === '/oauth/revoke') {
+    if (req.method !== 'POST') { json(405, { error: 'method_not_allowed' }); return; }
+    const krop = await readJsonBody(req, true);
+    // Baade et refresh- og et access-token kan sendes hertil.
+    tilbagekaldRefresh(krop.token);
+    db.prepare('UPDATE tokens SET revoked_at = ? WHERE hash = ? AND revoked_at IS NULL')
+      .run(now(), hashToken(String(krop.token || '')));
+    json(200, {});
+    return;
+  }
+
+  json(404, { error: 'not_found' });
+}
+
 /* ----------------------------------------------------------------- mcp */
 
 /**
@@ -2580,6 +3001,8 @@ const mcp = mcpModul.opret({
   logError,
   readJsonBody,
   godkendMcp,
+  oauthUdfordring: (req) =>
+    `Bearer realm="spolen", resource_metadata="${oauth.base(req)}/.well-known/oauth-protected-resource"`,
   maa: (auth, kraevet) => !!(auth && SCOPE_TILLADER[auth.token.scope]
     && SCOPE_TILLADER[auth.token.scope].has(kraevet)),
 
@@ -3349,7 +3772,13 @@ const ROUTES = {
     if (body.save) {
       setSetting(user.id, 'plex_url', url);
       setSetting(user.id, 'plex_token', token);
-      if (body.accountId) setSetting(user.id, 'plex_account_id', String(body.accountId));
+      if (body.accountId) {
+        setSetting(user.id, 'plex_account_id', String(body.accountId));
+        // Webhooken kender KONTONAVNET, ikke id'et - Plex sender
+        // Account.title. Uden navnet kan webhooken ikke filtrere.
+        const k = konti.find((x) => x.id === String(body.accountId));
+        if (k) setSetting(user.id, 'plex_account_navn', k.navn);
+      }
       audit('plex-forbundet', user.id, id.navn || null);
     }
     // Tokenet returneres ALDRIG - kun det, der er harmloest at vise.
@@ -3366,6 +3795,27 @@ const ROUTES = {
     db.prepare('DELETE FROM settings WHERE scope = ? AND key IN (?,?,?,?)')
       .run(user.id, 'plex_url', 'plex_token', 'plex_last_sync', 'plex_account_id');
     sendJson(res, 200, { ok: true });
+  },
+
+  'GET /api/plex/webhook': (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const t = plexWebhookToken(user.id, false);
+    sendJson(res, 200, { path: t ? `/plex/webhook/${t}` : null });
+  },
+
+  'POST /api/plex/webhook': (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    sendJson(res, 200, { path: `/plex/webhook/${plexWebhookToken(user.id, true)}` });
+  },
+
+  'DELETE /api/plex/webhook': (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    db.prepare('DELETE FROM settings WHERE scope = ? AND key = ?')
+      .run(user.id, 'plex_webhook_token');
+    sendJson(res, 200, { ok: true, path: null });
   },
 
   'POST /api/plex/import': async (req, res) => {
@@ -3992,6 +4442,15 @@ const server = http.createServer(async (req, res) => {
         'X-Content-Type-Options': 'nosniff',
       });
       res.end(req.method === 'HEAD' ? undefined : krop);
+      return;
+    }
+
+    // Plex-webhook: uden login, adressen ER hemmeligheden.
+    const hook = urlPath.match(/^\/plex\/webhook\/([A-Za-z0-9_-]{16,64})$/);
+    if (hook) { await haandterPlexWebhook(req, res, hook[1]); return; }
+
+    if (urlPath.startsWith('/oauth/') || urlPath.startsWith('/.well-known/oauth-')) {
+      await haandterOauth(req, res, urlPath, query);
       return;
     }
 

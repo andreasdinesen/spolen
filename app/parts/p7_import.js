@@ -176,6 +176,60 @@ async function poll() {
   } catch { /* en afbrudt polling er ikke vaerd at larme om */ }
 }
 
+/* ------------------------------------------------- trakt-appens noegler */
+
+/*
+ * Client id og secret for den Trakt-APP, hele installationen bruger.
+ *
+ * De MANGLEDE helt i foerste udgave: fejlbeskeden sagde "an administrator
+ * adds one under Settings", men der var intet felt at tilfoeje dem i, saa
+ * beskeden pegede paa det sted, brugeren allerede stod (Andreas, 2026-08-29).
+ *
+ * Adskilt fra selve forbindelsen nedenfor: app-noeglerne er husets, mens
+ * LOGINET er personligt - to i huset har hver sin Trakt-konto.
+ */
+function traktAppAfsnit() {
+  const sat = state.delte && state.delte.trakt_client_id;
+  const idFelt = el('input', {
+    type: 'text', spellcheck: 'false', style: 'font-size:16px',
+    value: sat || '',
+    placeholder: 'Client ID from trakt.tv',
+  });
+  const hemFelt = el('input', {
+    type: 'password', autocomplete: 'off', spellcheck: 'false', style: 'font-size:16px',
+    placeholder: sat ? 'A secret is saved — paste a new one to replace it' : 'Client Secret',
+  });
+
+  return el('div', {}, [
+    el('p', { class: 'dim lille', text:
+      'Register an app on trakt.tv once, for the whole household. '
+      + 'Press ? above for the exact steps — the redirect uri has to be a specific value.' }),
+    el('div', { class: 'formgrid' }, [
+      el('label', { text: 'Client ID' }), idFelt,
+      el('label', { text: 'Client Secret' }), hemFelt,
+      el('button', { class: 'btn primary', text: sat ? 'Replace' : 'Save', onclick: async (e) => {
+        const krop = {};
+        if (idFelt.value.trim()) krop.trakt_client_id = idFelt.value.trim();
+        if (hemFelt.value.trim()) krop.trakt_client_secret = hemFelt.value.trim();
+        if (!Object.keys(krop).length) { toast('Fill in at least one field.', 'fejl'); return; }
+        e.target.disabled = true;
+        try {
+          await api('/admin/settings', { method: 'PUT', body: krop });
+          // Hemmeligheden slippes fra hukommelsen, saa snart den er gemt.
+          hemFelt.value = '';
+          await hentSettings();
+          tegnSide();
+          toast('Saved. You can connect Trakt now.');
+        } catch (err) { toast(err.message, 'fejl'); }
+        e.target.disabled = false;
+      } }),
+    ]),
+    sat
+      ? el('p', { class: 'noeglestatus har', text: 'A Trakt application is configured.' })
+      : el('p', { class: 'noeglestatus mangler', text: 'No Trakt application yet.' }),
+  ]);
+}
+
 /* ---------------------------------------------------------- trakt-broen */
 
 /*
@@ -192,7 +246,8 @@ function traktAfsnit() {
   const forbundet = state.config && state.config.traktLinked;
 
   return el('div', {}, [
-    el('h3', { text: 'Trakt' }),
+    afsnitshoved('Trakt', 'trakt', 'h3'),
+    hjaelpePanel('trakt'),
     el('p', { class: 'dim lille', text:
       'Sequel syncs to Trakt, so connecting Trakt is the way to bring your Sequel '
       + 'history across without an export file.' }),
@@ -323,7 +378,8 @@ function plexAfsnit() {
   });
 
   return el('div', {}, [
-    el('h3', { text: 'Plex' }),
+    afsnitshoved('Plex', 'plex', 'h3'),
+    hjaelpePanel('plex'),
     el('p', { class: 'dim lille', text:
       'Plex is the only service that can tell spolen what you actually watched. '
       + 'Everything it finds is matched on Plex’s own ids, so it is exact — not guesswork.' }),
@@ -355,6 +411,7 @@ function plexAfsnit() {
       ? el('div', {}, [
           el('p', { class: 'noeglestatus har', text:
             'Connected. spolen checks for new plays every 10 minutes.' }),
+          plexWebhookAfsnit(),
           el('div', { class: 'knaprad' }, [
             el('button', { class: 'btn primary', text: 'Import everything from Plex',
               onclick: (e) => importerFraPlex(e.target, true) }),
@@ -433,4 +490,68 @@ async function importerFraPlex(knap, alt) {
     knap.textContent = gammel;
     toast(err.message, 'fejl');
   }
+}
+
+
+/* ---------------------------------------------------------- plex-webhook */
+
+/*
+ * Webhooken er en TILFOEJELSE, ikke fundamentet.
+ *
+ * Polling henter det samme med op til ti minutters forsinkelse. Webhooken
+ * goer det oejeblikkeligt - men den kraever Plex Pass, og adressen skal kunne
+ * naas FRA Plex-serveren. Begge dele staar i teksten, saa man ikke bruger en
+ * aften paa at finde ud af, at man ikke har Plex Pass.
+ */
+function plexWebhookAfsnit() {
+  const p = state.plex;
+  const fuld = p.webhook ? location.origin + p.webhook : '';
+  const felt = el('input', { readonly: true, value: fuld, style: 'font-size:16px',
+    onclick: (e) => e.target.select() });
+
+  return el('div', { class: 'webhookboks' }, [
+    el('h4', { text: 'Instant updates (optional)' }),
+    el('p', { class: 'dim lille', text:
+      'Plex can tell spolen the moment something finishes, instead of waiting for the '
+      + 'next check. It needs Plex Pass — without it the field exists but Plex never '
+      + 'sends anything.' }),
+    p.webhook
+      ? el('div', {}, [
+          el('div', { class: 'formgrid' }, [
+            el('label', { text: 'Webhook address' }), felt,
+            el('button', { class: 'btn ghost', text: 'Copy', onclick: async () => {
+              try { await navigator.clipboard.writeText(fuld); toast('Copied.'); }
+              catch { felt.select(); toast('Selected — press Cmd/Ctrl+C.', 'fejl'); }
+            } }),
+          ]),
+          el('p', { class: 'dim lille', text:
+            'Paste it under Plex → Settings → Webhooks. Your Plex server has to be able '
+            + 'to reach this address — if spolen is only on your own network, so is Plex.' }),
+          el('p', { class: 'dim lille', text:
+            'Anyone with this address can add entries to your history, so treat it like '
+            + 'a password.' }),
+          el('button', { class: 'btn ghost lille', text: 'Revoke address', onclick: async () => {
+            const svar = await spoerg('Revoke the webhook address?',
+              'Plex stops being able to report plays instantly. The 10-minute check keeps working.',
+              [{ id: 'ja', text: 'Revoke', primary: true }, { id: 'nej', text: 'Cancel' }]);
+            if (svar !== 'ja') return;
+            await api('/plex/webhook', { method: 'DELETE' });
+            state.plex.webhook = null;
+            tegnSide();
+          } }),
+        ])
+      : el('button', { class: 'btn ghost', text: 'Create webhook address', onclick: async (e) => {
+          e.target.disabled = true;
+          try {
+            const r = await api('/plex/webhook', { method: 'POST' });
+            state.plex.webhook = r.path;
+            tegnSide();
+          } catch (err) { e.target.disabled = false; toast(err.message, 'fejl'); }
+        } }),
+  ]);
+}
+
+async function hentPlexWebhook() {
+  try { state.plex.webhook = (await api('/plex/webhook')).path; }
+  catch { state.plex.webhook = null; }
 }
