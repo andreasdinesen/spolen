@@ -48,7 +48,42 @@ if (typeof module !== 'undefined' && module.exports) {
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 12;
+const APP_VERSION = 13;
+
+/* ---------------------------------------------------------------- tema */
+
+/*
+ * Lyst, moerkt eller "foelg maskinen" - som i doda (Andreas, 2026-08-29).
+ *
+ * Noeglen 'spolen_theme' er den SAMME, som index.html laeser i sit lille
+ * skript i <head>. Det skript koerer FOER app.js og saetter data-theme med
+ * det samme, saa siden ikke blinker hvidt paa vej ind i moerkt tema. Skifter
+ * man noeglen her, skal den skiftes dér ogsaa - ellers husker appen et tema,
+ * den ikke faar sat ved indlaesning.
+ */
+function anvendTema(valg) {
+  if (valg === 'light' || valg === 'dark') document.documentElement.setAttribute('data-theme', valg);
+  else document.documentElement.removeAttribute('data-theme');
+  try { localStorage.setItem('spolen_theme', valg); } catch { /* privat tilstand */ }
+}
+
+function nuvaerendeTema() {
+  try { return localStorage.getItem('spolen_theme') || 'auto'; } catch { return 'auto'; }
+}
+
+/*
+ * Det tema, man rent faktisk SER.
+ *
+ * "Follow system" er ikke en tredje farve - den er lys eller moerk,
+ * afhaengigt af maskinen. Knappen i foden skal vise vejen til det MODSATTE
+ * af det, oejet ser, og den kan altsaa ikke noejes med at kigge paa det
+ * gemte valg.
+ */
+function visuelTema() {
+  const valg = nuvaerendeTema();
+  if (valg === 'light' || valg === 'dark') return valg;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
 
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
@@ -257,6 +292,11 @@ const IKONER = {
   // Filmspolen - samme maerke som appens ikon.
   brand: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="7" r="1.6"/><circle cx="12" cy="17" r="1.6"/><circle cx="7" cy="12" r="1.6"/><circle cx="17" cy="12" r="1.6"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  // Sol og maane til temaknappen - samme streger som i doda, saa de to
+  // apps foles ens i sidebarens fod.
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 3.5v2M12 18.5v2M20.5 12h-2M5.5 12h-2M17.8 6.2l-1.4 1.4M7.6 16.4l-1.4 1.4M17.8 17.8l-1.4-1.4M7.6 7.6L6.2 6.2"/>',
+  moon: '<path d="M20 14.6A8.6 8.6 0 019.4 4 8.6 8.6 0 1020 14.6z"/>',
+  out: '<path d="M14.5 4.5H18a1.5 1.5 0 011.5 1.5v12a1.5 1.5 0 01-1.5 1.5h-3.5"/><path d="M4.5 12h10M11 8.5l3.5 3.5-3.5 3.5"/>',
 };
 
 /*
@@ -297,7 +337,11 @@ const SIDER = [
   { id: 'calendar', navn: 'Calendar' },
   { id: 'stats', navn: 'Statistics' },
   { id: 'sharing', navn: 'Sharing' },
-  { id: 'settings', navn: 'Settings' },
+  /*
+   * Settings staar IKKE her. Brugerknappen i sidebarens fod er indgangen,
+   * som i doda (Andreas, 2026-08-29). Siden findes stadig som view - den
+   * naas bare gennem brugermenuen.
+   */
 ];
 
 function skal(indhold) {
@@ -362,14 +406,17 @@ function skal(indhold) {
      * at man goer det, og at de ikke staar inde for appen. Den skal derfor
      * staa et sted, der altid er synligt - ikke gemt i en om-dialog.
      */
+    /*
+     * Foden, som i doda: brugerens navn er indgangen til Settings, og
+     * versionen deler linje med temaknappen (Andreas, 2026-08-29).
+     *
+     * "Sign out" stod foer som en knap her. Den er flyttet ind i
+     * brugermenuen - to knapper ved siden af hinanden, hvor den ene logger
+     * ud, er et uheld der venter paa at ske.
+     */
     el('div', { class: 'sidebar-foot' }, [
-      el('span', { class: 'dim lille', text: state.user ? visNavn(state.user.username) : '' }),
-      el('button', { class: 'btn ghost lille', text: 'Sign out', onclick: async () => {
-        await api('/logout', { method: 'POST' });
-        state.user = null;
-        loginSide('Signed out.');
-      } }),
-      versionsLinje(),
+      brugerKnap(),
+      el('div', { class: 'foot-row' }, [versionsLinje(), temaKnap()]),
       el('p', { class: 'dim tmdb-kredit', text:
         'Uses the TMDB API but is not endorsed or certified by TMDB.' }),
     ]),
@@ -387,6 +434,105 @@ function skal(indhold) {
   ]));
   if (beholdTop) tegnOmniPanel();
   sc.scrollTop = gemtRul;
+}
+
+/*
+ * Brugerknappen - indgangen til Settings.
+ *
+ * Settings staar ikke i navigationen laengere, saa knappen skal ogsaa vise,
+ * NAAR man er derinde. Ellers er intet punkt markeret, og man kan ikke se
+ * hvor man er (samme greb som doda).
+ */
+function brugerKnap() {
+  return el('button', {
+    class: 'nav-item',
+    id: 'brugerKnap',
+    'aria-current': state.view === 'settings' ? 'page' : null,
+    onclick: (e) => { e.stopPropagation(); visBrugerMenu(); },
+  }, [ikon(IKONER.settings), el('span', { text: state.user ? visNavn(state.user.username) : '' })]);
+}
+
+/*
+ * Ét klik mellem lyst og moerkt, uden at gaa i Settings.
+ *
+ * Knappen viser det tema, man skifter TIL - ikke det, man er i. Alle tre
+ * valg (inklusive "Follow system") bliver staaende under Settings; det her
+ * er genvejen, ikke hele indstillingen.
+ */
+function temaKnap() {
+  const naeste = visuelTema() === 'dark' ? 'light' : 'dark';
+  return el('button', {
+    class: 'temabtn',
+    id: 'temaKnap',
+    'aria-label': `Switch to ${naeste} theme`,
+    title: `Switch to ${naeste} theme`,
+    onclick: () => {
+      anvendTema(naeste);
+      // Er man PAA indstillingssiden, skal de tre knapper dér ogsaa foelge
+      // med - ellers staar den gamle markering tilbage.
+      tegnSide();
+    },
+  }, [ikon(naeste === 'dark' ? IKONER.moon : IKONER.sun, { stoerrelse: 16 })]);
+}
+
+/*
+ * Brugermenuen.
+ *
+ * Log ud skal kunne naas uden at gaa i indstillingerne. Menuen er en lille
+ * popover over brugerknappen - samme sted, man i forvejen klikker.
+ */
+function visBrugerMenu() {
+  const gammel = document.getElementById('brugerMenu');
+  if (gammel) { gammel.remove(); return; }        // andet klik lukker igen
+  const anker = document.getElementById('brugerKnap');
+  if (!anker) return;
+
+  const gaa = async (hvad) => {
+    const m = document.getElementById('brugerMenu');
+    if (m) m.remove();
+    if (hvad === 'settings') {
+      state.view = 'settings';
+      tegnSide();
+      await Promise.all([hentSettings(), tjekTmdb(), hentTjenester(), hentNoegler(),
+        hentPlexWebhook(), hentPush()]);
+      tegnSide();
+      if (smalSkaerm()) document.body.classList.remove('navopen');
+      return;
+    }
+    await api('/logout', { method: 'POST' });
+    state.user = null;
+    loginSide('Signed out.');
+  };
+
+  const menu = el('div', { class: 'usermenu', id: 'brugerMenu' }, [
+    el('div', { class: 'usermenu-head' }, [
+      el('div', { class: 'usermenu-name', text: state.user ? visNavn(state.user.username) : '' }),
+      el('div', { class: 'meta', text: 'Signed in' }),
+    ]),
+    el('button', { class: 'usermenu-item', onclick: () => gaa('settings') },
+      [ikon(IKONER.settings, { stoerrelse: 17 }), el('span', { text: 'Settings' })]),
+    el('button', { class: 'usermenu-item danger', onclick: () => gaa('logout') },
+      [ikon(IKONER.out, { stoerrelse: 17 }), el('span', { text: 'Log out' })]),
+  ]);
+
+  const r = anker.getBoundingClientRect();
+  menu.style.left = `${Math.round(r.left)}px`;
+  menu.style.bottom = `${Math.round(window.innerHeight - r.top + 8)}px`;
+  document.body.appendChild(menu);
+
+  /*
+   * Ét klik udenfor lukker igen. setTimeout, saa klikket der AABNEDE menuen
+   * ikke naar at lukke den med det samme.
+   */
+  setTimeout(() => {
+    document.addEventListener('click', function udenfor(e) {
+      if (!menu.isConnected) { document.removeEventListener('click', udenfor); return; }
+      if (!menu.contains(e.target) && e.target !== anker) {
+        menu.remove();
+        document.removeEventListener('click', udenfor);
+      }
+    });
+  }, 0);
 }
 
 /*
@@ -629,6 +775,13 @@ function tegnSide() {
 }
 
 async function indlaes() {
+  /*
+   * Temaet saettes ogsaa HER, selv om index.html allerede gjorde det i
+   * <head>. Det skript kan kun laese localStorage; her fanger vi ogsaa den
+   * situation, hvor lageret er utilgaengeligt, og appen skal falde tilbage
+   * til systemets valg uden at kaste.
+   */
+  anvendTema(nuvaerendeTema());
   try {
     const [cfg, me] = await Promise.all([api('/public-config'), api('/me')]);
     state.config = cfg;
@@ -1047,6 +1200,16 @@ function settingsSide() {
   return el('div', {}, [
     el('h1', { text: 'Settings' }),
 
+    /*
+     * Temaet staar OEVERST og er ikke foldet.
+     *
+     * Det er den ene indstilling, man aendrer for at se paa den - er den
+     * gemt bag en overskrift, skal man folde ud, klikke, og folde ind igen
+     * for at se resultatet. De tre valg fylder én linje (Andreas,
+     * 2026-08-29).
+     */
+    temaAfsnit(),
+
     foldAfsnit('metadata', 'Metadata', 'tmdb', () => (admin
       ? tmdbAfsnit()
       : el('p', { class: 'dim', text: 'Only the administrator can change the TMDB key.' }))),
@@ -1075,6 +1238,29 @@ function settingsSide() {
     foldAfsnit('noegler', 'Access keys', 'noegler', noegleAfsnit),
 
     admin ? foldAfsnit('server', 'This server', null, serverAfsnit) : null,
+  ]);
+}
+
+/*
+ * Alle tre temavalg. Genvejen i sidebarens fod skifter kun mellem lys og
+ * moerk; "Follow system" findes kun her, fordi den ikke er en tredje farve,
+ * man kan skifte TIL i en toggle.
+ */
+function temaAfsnit() {
+  const nu = nuvaerendeTema();
+  const valg = [['auto', 'Follow system'], ['light', 'Light'], ['dark', 'Dark']];
+  return el('section', { class: 'card' }, [
+    el('h2', { text: 'Theme' }),
+    el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:12px' },
+      valg.map(([v, l]) => el('button', {
+        class: `btn ${nu === v ? 'primary' : ''}`,
+        'aria-pressed': nu === v ? 'true' : 'false',
+        text: l,
+        // Hele siden tegnes om, saa BAADE de tre knapper og temaknappen i
+        // foden foelger med. Ellers viser foden vej til det tema, man
+        // allerede er i.
+        onclick: () => { anvendTema(v); tegnSide(); },
+      }))),
   ]);
 }
 

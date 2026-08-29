@@ -20,6 +20,16 @@ function settingsSide() {
   return el('div', {}, [
     el('h1', { text: 'Settings' }),
 
+    /*
+     * Temaet staar OEVERST og er ikke foldet.
+     *
+     * Det er den ene indstilling, man aendrer for at se paa den - er den
+     * gemt bag en overskrift, skal man folde ud, klikke, og folde ind igen
+     * for at se resultatet. De tre valg fylder én linje (Andreas,
+     * 2026-08-29).
+     */
+    temaAfsnit(),
+
     foldAfsnit('metadata', 'Metadata', 'tmdb', () => (admin
       ? tmdbAfsnit()
       : el('p', { class: 'dim', text: 'Only the administrator can change the TMDB key.' }))),
@@ -48,6 +58,29 @@ function settingsSide() {
     foldAfsnit('noegler', 'Access keys', 'noegler', noegleAfsnit),
 
     admin ? foldAfsnit('server', 'This server', null, serverAfsnit) : null,
+  ]);
+}
+
+/*
+ * Alle tre temavalg. Genvejen i sidebarens fod skifter kun mellem lys og
+ * moerk; "Follow system" findes kun her, fordi den ikke er en tredje farve,
+ * man kan skifte TIL i en toggle.
+ */
+function temaAfsnit() {
+  const nu = nuvaerendeTema();
+  const valg = [['auto', 'Follow system'], ['light', 'Light'], ['dark', 'Dark']];
+  return el('section', { class: 'card' }, [
+    el('h2', { text: 'Theme' }),
+    el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:12px' },
+      valg.map(([v, l]) => el('button', {
+        class: `btn ${nu === v ? 'primary' : ''}`,
+        'aria-pressed': nu === v ? 'true' : 'false',
+        text: l,
+        // Hele siden tegnes om, saa BAADE de tre knapper og temaknappen i
+        // foden foelger med. Ellers viser foden vej til det tema, man
+        // allerede er i.
+        onclick: () => { anvendTema(v); tegnSide(); },
+      }))),
   ]);
 }
 

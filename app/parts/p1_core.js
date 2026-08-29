@@ -11,7 +11,42 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 12;
+const APP_VERSION = 13;
+
+/* ---------------------------------------------------------------- tema */
+
+/*
+ * Lyst, moerkt eller "foelg maskinen" - som i doda (Andreas, 2026-08-29).
+ *
+ * Noeglen 'spolen_theme' er den SAMME, som index.html laeser i sit lille
+ * skript i <head>. Det skript koerer FOER app.js og saetter data-theme med
+ * det samme, saa siden ikke blinker hvidt paa vej ind i moerkt tema. Skifter
+ * man noeglen her, skal den skiftes dér ogsaa - ellers husker appen et tema,
+ * den ikke faar sat ved indlaesning.
+ */
+function anvendTema(valg) {
+  if (valg === 'light' || valg === 'dark') document.documentElement.setAttribute('data-theme', valg);
+  else document.documentElement.removeAttribute('data-theme');
+  try { localStorage.setItem('spolen_theme', valg); } catch { /* privat tilstand */ }
+}
+
+function nuvaerendeTema() {
+  try { return localStorage.getItem('spolen_theme') || 'auto'; } catch { return 'auto'; }
+}
+
+/*
+ * Det tema, man rent faktisk SER.
+ *
+ * "Follow system" er ikke en tredje farve - den er lys eller moerk,
+ * afhaengigt af maskinen. Knappen i foden skal vise vejen til det MODSATTE
+ * af det, oejet ser, og den kan altsaa ikke noejes med at kigge paa det
+ * gemte valg.
+ */
+function visuelTema() {
+  const valg = nuvaerendeTema();
+  if (valg === 'light' || valg === 'dark') return valg;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
 
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
