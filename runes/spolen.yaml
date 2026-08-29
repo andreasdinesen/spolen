@@ -1,0 +1,84 @@
+gameskill:
+  id: spolen
+  name: spolen
+  category: Apps
+  description: Privat film- og serietracker. Holder styr paa hvad du har set, hvad du mangler, og hvornaar naeste afsnit sendes.
+    Henter metadata fra TMDB, viser hvor titlen kan streames, importerer historik fra Trakt, Plex, Letterboxd og Netflix,
+    og deler praecis det, du vaelger, med resten af husstanden. Egen SQLite-database, ingen eksterne afhaengigheder.
+  author: andreas
+  version: 1
+  icon: app
+  docker:
+    image: '{{NODE_IMAGE}}'
+  variables:
+  - key: APP_NAME
+    name: Appens navn
+    type: string
+    default: spolen
+  - key: NODE_IMAGE
+    name: Node-image
+    type: string
+    default: node:24-alpine
+    pattern: ^node:[0-9][A-Za-z0-9._-]*$
+    hint: Skal vaere et node:-image, fx node:24-alpine
+  install:
+    image: '{{NODE_IMAGE}}'
+    script: "set -eu\necho \"Installerer spolen v1 ...\"\necho \"Node: $(node --version)\"\n\necho \"Henter app-koden fra\
+      \ GitHub ...\"\nrm -rf /tmp/spolen-hent\nmkdir -p /tmp/spolen-hent\nnode -e 'const https=require(\"https\"),zlib=require(\"\
+      zlib\");const U=\"https://codeload.github.com/andreasdinesen/spolen/tar.gz/refs/tags/v1\";function d(m){console.error(\"\
+      [fejl] \"+m);console.error(\"Adresse: \"+U);console.error(\"Repoet er offentligt, saa en 404 betyder, at adressen ikke\
+      \ findes - tjek at taggen er pushet.\");process.exit(1);}function hent(u,n){const h={\"user-agent\":\"spolen-installer\"\
+      };https.get(u,{headers:h},(r)=>{if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){if(n<=0)return d(\"for mange\
+      \ omdirigeringer\");r.resume();return hent(new URL(r.headers.location,u).toString(),n-1);}if(r.statusCode!==200)return\
+      \ d(\"GitHub svarede \"+r.statusCode);const g=zlib.createGunzip();g.on(\"error\",(e)=>d(\"arkivet kunne ikke pakkes\
+      \ ud: \"+e.message));r.pipe(g).pipe(process.stdout);}).on(\"error\",(e)=>d(\"kunne ikke naa GitHub: \"+e.message));}hent(U,3);'\
+      \ > /tmp/spolen-hent/app.tar\ntar x -C /tmp/spolen-hent -f /tmp/spolen-hent/app.tar\n\n# Mappenavnet i et GitHub-arkiv\
+      \ er <repo>-<ref uden v>, og arkivet begynder\n# med en pax_global_header-post. Ingen af delene gaettes: find den app-mappe,\n\
+      # der FINDES.\nNY=$(find /tmp/spolen-hent -maxdepth 2 -type d -name app | head -n 1)\nif [ -z \"$NY\" ] || [ ! -f \"\
+      $NY/server.js\" ]; then\n  echo \"[fejl] arkivet fra GitHub indeholder ingen app/server.js\"\n  exit 1\nfi\nrm -rf app\n\
+      mv \"$NY\" app\nrm -rf /tmp/spolen-hent\n\necho \"Filer udpakket:\"\nls -1 app app/public\necho \"Klar. Start serveren\
+      \ i panelet.\"\n"
+  update:
+    image: '{{NODE_IMAGE}}'
+    label: Opdater spolen
+    script: "set -eu\necho \"Opdaterer spolen til v1 ...\"\necho \"Node: $(node --version)\"\n\necho \"Henter app-koden fra\
+      \ GitHub ...\"\nrm -rf /tmp/spolen-hent\nmkdir -p /tmp/spolen-hent\nnode -e 'const https=require(\"https\"),zlib=require(\"\
+      zlib\");const U=\"https://codeload.github.com/andreasdinesen/spolen/tar.gz/refs/tags/v1\";function d(m){console.error(\"\
+      [fejl] \"+m);console.error(\"Adresse: \"+U);console.error(\"Repoet er offentligt, saa en 404 betyder, at adressen ikke\
+      \ findes - tjek at taggen er pushet.\");process.exit(1);}function hent(u,n){const h={\"user-agent\":\"spolen-installer\"\
+      };https.get(u,{headers:h},(r)=>{if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){if(n<=0)return d(\"for mange\
+      \ omdirigeringer\");r.resume();return hent(new URL(r.headers.location,u).toString(),n-1);}if(r.statusCode!==200)return\
+      \ d(\"GitHub svarede \"+r.statusCode);const g=zlib.createGunzip();g.on(\"error\",(e)=>d(\"arkivet kunne ikke pakkes\
+      \ ud: \"+e.message));r.pipe(g).pipe(process.stdout);}).on(\"error\",(e)=>d(\"kunne ikke naa GitHub: \"+e.message));}hent(U,3);'\
+      \ > /tmp/spolen-hent/app.tar\ntar x -C /tmp/spolen-hent -f /tmp/spolen-hent/app.tar\n\n# Mappenavnet i et GitHub-arkiv\
+      \ er <repo>-<ref uden v>, og arkivet begynder\n# med en pax_global_header-post. Ingen af delene gaettes: find den app-mappe,\n\
+      # der FINDES.\nNY=$(find /tmp/spolen-hent -maxdepth 2 -type d -name app | head -n 1)\nif [ -z \"$NY\" ] || [ ! -f \"\
+      $NY/server.js\" ]; then\n  echo \"[fejl] arkivet fra GitHub indeholder ingen app/server.js\"\n  exit 1\nfi\nrm -rf app\n\
+      mv \"$NY\" app\nrm -rf /tmp/spolen-hent\n\necho \"App-filerne er skiftet ud. Databasen i /data er uroert.\"\necho \"\
+      Skemaet opdateres automatisk, naar serveren starter.\"\n"
+  startup:
+    command: "if node -e \"require('node:sqlite')\" >/dev/null 2>&1; then\n  exec node app/server.js\nelse\n  exec node --experimental-sqlite\
+      \ app/server.js\nfi\n"
+    done_regex: spolen lytter
+    stop_timeout: 30
+  ports:
+  - name: web
+    default: 3000
+    protocol: tcp
+  watchers:
+  - name: Serverfejl i spolen
+    pattern: \[fejl\]
+    threshold: 5
+  events:
+  - name: Sikkerhedshaendelser i spolen
+    pattern: \[sikkerhed\]
+  backup:
+    include:
+    - spolen.db
+  wipe:
+    paths:
+    - spolen.db
+    - spolen.db-wal
+    - spolen.db-shm
+    - posters
+    backup_first: true

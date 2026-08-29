@@ -1,0 +1,12 @@
+{
+  "name": "spolen",
+  "short_name": "spolen",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#efe9e2",
+  "theme_color": "#efe9e2",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

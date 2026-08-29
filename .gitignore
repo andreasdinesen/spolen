@@ -1,0 +1,7 @@
+# Lokale arbejdsfiler - hoerer ikke i et offentligt repo.
+node_modules/
+*.db
+*.db-wal
+*.db-shm
+posters/
+.DS_Store
