@@ -14,7 +14,7 @@
  * skift. Kun de statiske filer gemmes.
  */
 
-const VERSION = 3;               /* stemples af build_rune.py */
+const VERSION = 4;               /* stemples af build_rune.py */
 const CACHE = `spolen-v${VERSION}`;
 
 /* Samme ?v=-stempler som index.html, ellers henter appen én fil fra cachen

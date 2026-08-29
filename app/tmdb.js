@@ -231,7 +231,65 @@ async function hentOverblik(noegle, kind, tmdbId, opts) {
     // personer betyder noget andet end et 7-tal fra ti tusind.
     score: t.vote_average ? Math.round(t.vote_average * 10) / 10 : null,
     votes: t.vote_count || 0,
+    collectionId: (t.belongs_to_collection && t.belongs_to_collection.id) || null,
+    collectionName: (t.belongs_to_collection && t.belongs_to_collection.name) || null,
   };
+}
+
+/**
+ * En SAMLING - fx "Spider-Man Collection" med 1, 2 og 3.
+ *
+ * Det er det PRAECISE svar paa "findes der en toer?". TMDB knytter selv
+ * efterfoelgere sammen i en samling, saa vi behoever ikke gaette ud fra
+ * titler - og et gaet ville tage fejl begge veje: "Spider-Man 2" og
+ * "The Amazing Spider-Man 2" er ikke i samme raekke.
+ */
+async function hentSamling(noegle, samlingId, opts) {
+  const o = opts || {};
+  const c = await hent(noegle, `/collection/${Number(samlingId)}`, { language: o.sprog || 'en-US' });
+  return {
+    id: c.id,
+    name: c.name || '',
+    overview: c.overview || '',
+    posterPath: c.poster_path || null,
+    dele: (c.parts || [])
+      .map((p) => ({
+        kind: 'movie',
+        tmdbId: p.id,
+        name: p.title || '',
+        year: aar(p.release_date),
+        posterPath: p.poster_path || null,
+        releaseDate: p.release_date || null,
+      }))
+      // Udgivelsesorden, ikke TMDB's egen. Dele UDEN dato (annoncerede, men
+      // ikke planlagte) laegges sidst frem for at ryge foerst med en tom
+      // streng - de hoerer til i fremtiden.
+      .sort((a, b) => {
+        if (!a.releaseDate) return 1;
+        if (!b.releaseDate) return -1;
+        return a.releaseDate < b.releaseDate ? -1 : 1;
+      }),
+  };
+}
+
+/**
+ * TMDB's egne anbefalinger - de LOESERE slaegtninge.
+ *
+ * En samling daekker efterfoelgere; anbefalingerne daekker det, en samling
+ * IKKE binder sammen: genstarter, spin-offs og film i samme hjoerne. For
+ * Spider-Man er det forskellen paa "2 og 3" og "de andre Spider-Man-film".
+ */
+async function hentAnbefalinger(noegle, kind, tmdbId, opts) {
+  const o = opts || {};
+  const r = await hent(noegle, `/${kind === 'movie' ? 'movie' : 'tv'}/${Number(tmdbId)}/recommendations`,
+    { language: o.sprog || 'en-US' });
+  return (r.results || []).slice(0, 12).map((x) => ({
+    kind: kind === 'movie' ? 'movie' : 'tv',
+    tmdbId: x.id,
+    name: kind === 'movie' ? (x.title || '') : (x.name || ''),
+    year: aar(kind === 'movie' ? x.release_date : x.first_air_date),
+    posterPath: x.poster_path || null,
+  }));
 }
 
 /** Hele serien: stamdata + alle afsnit fra alle saesoner. */
@@ -331,6 +389,10 @@ async function hentFilm(noegle, tmdbId, opts) {
         runtime: f.runtime || null,
         originalName: f.original_title || '',
         releaseDate: f.release_date || null,
+        // Samlingens ID gemmes paa filmen, saa "findes der en toer?" kan
+        // besvares uden et ekstra TMDB-kald hver gang titlen aabnes.
+        collectionId: (f.belongs_to_collection && f.belongs_to_collection.id) || null,
+        collectionName: (f.belongs_to_collection && f.belongs_to_collection.name) || null,
       },
     },
     afsnit: [],
@@ -379,5 +441,5 @@ async function hentProviders(noegle, kind, tmdbId, region) {
 
 module.exports = {
   TmdbFejl, erBearer, aar, billedUrl, PLAKAT_BREDDE,
-  soeg, findVedEksterntId, hentOverblik, hentUdbydere, hentSerie, hentFilm, hentTitel, hentProviders,
+  soeg, findVedEksterntId, hentOverblik, hentUdbydere, hentSamling, hentAnbefalinger, hentSerie, hentFilm, hentTitel, hentProviders,
 };

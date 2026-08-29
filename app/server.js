@@ -498,6 +498,24 @@ const MIGRATIONS = [
       CREATE INDEX ix_push_bruger ON push_subs(user_id);
     `);
   },
+
+  function m8(d) {
+    /*
+     * Samlinger ("Spider-Man Collection" med 1, 2 og 3).
+     *
+     * Hoerer til metadata-planen: samlingen er den samme for hele husstanden,
+     * saa der er intet user_id. Det PERSONLIGE er, hvilke dele man har set,
+     * og det staar allerede i watches.
+     */
+    d.exec(`
+      CREATE TABLE collections (
+        id         INTEGER PRIMARY KEY,
+        name       TEXT NOT NULL,
+        data       TEXT NOT NULL,
+        fetched_at INTEGER NOT NULL
+      );
+    `);
+  },
 ];
 
 function migrate() {
@@ -1204,6 +1222,70 @@ function sletItem(userId, id) {
 function hentTracking(userId, titleId) {
   const raekker = hentItems(userId, { kind: 'tracking', titleId });
   return raekker[0] || null;
+}
+
+/* ---------------------------------------------------------- samlinger */
+
+/* En samling aendrer sig sjaeldent - en efterfoelger annonceres ikke i dag.
+   30 dage er rigeligt til at fange en ny del, foer nogen leder efter den. */
+const SAMLING_ALDER = 30 * 86400;
+
+async function sikrSamling(noegle, samlingId, sprog) {
+  const id = Number(samlingId);
+  if (!id) return null;
+  const r = db.prepare('SELECT data, fetched_at FROM collections WHERE id = ?').get(id);
+  if (r && now() - r.fetched_at < SAMLING_ALDER) {
+    try { return JSON.parse(r.data); } catch { /* daarlig cache hentes igen */ }
+  }
+  try {
+    const c = await tmdb.hentSamling(noegle, id, { sprog });
+    db.prepare(`INSERT INTO collections (id, name, data, fetched_at) VALUES (?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET name = excluded.name,
+                  data = excluded.data, fetched_at = excluded.fetched_at`)
+      .run(id, c.name, JSON.stringify(c), now());
+    return c;
+  } catch {
+    // Har vi en gammel kopi, er den bedre end ingenting.
+    if (r) { try { return JSON.parse(r.data); } catch { /* nej */ } }
+    return null;
+  }
+}
+
+/**
+ * Samlingen, som BRUGEREN ser den: hver del med "har jeg den" og "har jeg set den".
+ *
+ * Det er hele pointen med funktionen. En liste over Spider-Man 1, 2 og 3
+ * siger ikke ret meget; en liste, hvor 1 er set og 2 og 3 ikke er, svarer paa
+ * det spoergsmaal, man faktisk stillede.
+ */
+function samlingForBruger(userId, samling, denneTitelId) {
+  if (!samling) return null;
+  const ids = samling.dele.map((d) => titelId('movie', d.tmdbId));
+  const iBiblioteket = new Set(
+    hentItems(userId, { kind: 'tracking' })
+      .map((t) => t.titleId).filter((x) => ids.includes(x)));
+  const sete = new Set();
+  for (const id of ids) {
+    if (hentWatches(userId, { titleId: id, graense: 1 }).length) sete.add(id);
+  }
+  const dele = samling.dele.map((d) => {
+    const id = titelId('movie', d.tmdbId);
+    return Object.assign({}, d, {
+      id,
+      denne: id === denneTitelId,
+      iBiblioteket: iBiblioteket.has(id),
+      set: sete.has(id),
+    });
+  });
+  return {
+    id: samling.id,
+    name: samling.name,
+    dele,
+    // Tallene, fladen kan skrive en saetning ud fra.
+    ialt: dele.length,
+    sete: dele.filter((d) => d.set).length,
+    manglerSete: dele.filter((d) => !d.set && !d.denne).length,
+  };
 }
 
 /* ------------------------------------------------------- streamingudbud */
@@ -3282,6 +3364,18 @@ async function titelMedFremdrift(userId, id, idag) {
    * Et manglende udbud er ikke en fejl - mange titler er ikke paa noget i
    * Danmark, og det er i sig selv svaret.
    */
+  /*
+   * Er filmen del af en samling, hentes den med. Kun for FILM: TMDB har
+   * ingen samlinger for serier, og en serie har saesoner i stedet.
+   */
+  const noegle = getSetting('*', 'tmdb_key', '');
+  if (titel.kind === 'movie' && titel.collectionId && noegle) {
+    try {
+      const c = await sikrSamling(noegle, titel.collectionId, metadataSprog());
+      ud.collection = samlingForBruger(userId, c, id);
+    } catch { /* en manglende samling maa ikke vaelte titelvisningen */ }
+  }
+
   const region = (getSetting(userId, 'region', 'DK') || 'DK').toUpperCase();
   try {
     const cachet = await sikrProviders(getSetting('*', 'tmdb_key', ''), id, region);
@@ -4240,6 +4334,32 @@ const ROUTES = {
       raekker.push(...await trakt.hentWatchlist(clientId, token, { pause }));
     }
     sendJson(res, 200, await koerImportRaekker(user.id, raekker, 'Trakt', []));
+  },
+
+  /*
+   * De LOESERE slaegtninge - TMDB's egne anbefalinger.
+   *
+   * Adskilt fra titelvisningen og hentet paa forespoergsel: det er ét kald
+   * mere pr. titel, og de fleste vil se fremdriften, ikke naboerne. Samlingen
+   * (efterfoelgerne) kommer derimod med i titelvisningen, fordi "findes der
+   * en toer?" er et spoergsmaal, man har MENS man kigger.
+   */
+  'GET /api/related': async (req, res, ctx) => {
+    const g = godkend(req, res, 'read');
+    if (!g) return;
+    const id = str(ctx.query.get('id'), 64);
+    const m = /^(tv|movie):(\d+)$/.exec(id);
+    if (!m) { apiFejl(res, 400, 'bad_request', 'A title id is required.'); return; }
+    const liste = await tmdb.hentAnbefalinger(tmdbNoegle(), m[1], Number(m[2]),
+      { sprog: sprogFor(g.user.id) });
+    const mine = new Set(hentItems(g.user.id, { kind: 'tracking' }).map((t) => t.titleId));
+    sendJson(res, 200, {
+      results: liste.map((r) => Object.assign({}, r, {
+        id: `${r.kind}:${r.tmdbId}`,
+        poster: r.posterPath ? `/api/poster/w342${r.posterPath}` : null,
+        tracked: mine.has(`${r.kind}:${r.tmdbId}`),
+      })),
+    });
   },
 
   /* ------------------------------------------------------ streamingudbud */

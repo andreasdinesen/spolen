@@ -3,7 +3,7 @@
 
 async function aabnTitel(id) {
   state.view = 'title';
-  state.titel = { id, data: null, fejl: '', aabne: new Set() };
+  state.titel = { id, data: null, fejl: '', aabne: new Set(), beslaegtede: null };
   tegnSide();
   try {
     state.titel.data = await api(`/titles/${encodeURIComponent(id)}`);
@@ -49,6 +49,8 @@ function titelSide() {
         udbudsAfsnit(t.data),
       ]),
     ]),
+    samlingsAfsnit(t.data),
+    beslaegtedeAfsnit(),
     t.data.episodes ? saesonListe(t.data.episodes, titel.id) : null,
   ]);
 }
@@ -159,8 +161,11 @@ async function genindlaesTitel(titleId) {
   // Foldetilstanden skal OVERLEVE en gentegning - ellers klapper alle
   // saesoner sammen, hver gang man markerer et afsnit.
   const aabne = state.titel.aabne;
+  const beslaegtede = state.titel.beslaegtede;
   state.titel.data = await api(`/titles/${encodeURIComponent(titleId)}`);
   state.titel.aabne = aabne;
+  // De beslaegtede skal ikke hentes igen, fordi et afsnit blev markeret.
+  state.titel.beslaegtede = beslaegtede;
   await Promise.all([hentUpNext(), hentBibliotek()]);
   tegnSide();
 }
@@ -342,4 +347,106 @@ function udbudsAfsnit(d) {
     linje('Buy', koeb),
     el('p', { class: 'dim lille', text: 'Availability from TMDB/JustWatch.' }),
   ]);
+}
+
+
+/* ---------------------------------------------------------- samlingen */
+
+/*
+ * "Findes der en toer?" (Andreas, 2026-08-29).
+ *
+ * TMDB knytter selv efterfoelgere sammen i en SAMLING, saa Spider-Man 1, 2
+ * og 3 hoerer sammen som et faktum - ikke som et gaet ud fra titler. Et gaet
+ * ville tage fejl begge veje: "Spider-Man 2" og "The Amazing Spider-Man 2"
+ * ligner hinanden og hoerer ikke sammen.
+ *
+ * Overskriften siger det, man SPURGTE om, frem for bare at liste delene:
+ * "du har set 1 af 3" er et svar, en liste er det ikke.
+ */
+function samlingsAfsnit(d) {
+  const c = d.collection;
+  if (!c || c.dele.length < 2) return null;
+
+  const usete = c.dele.filter((x) => !x.set && !x.denne);
+  const besked = usete.length
+    ? `You have seen ${c.sete} of ${c.ialt}. `
+      + `${usete.length === 1 ? 'One more' : `${usete.length} more`} in this series: `
+      + usete.map((x) => x.name).join(', ') + '.'
+    : `You have seen all ${c.ialt}.`;
+
+  return el('section', { class: 'samling' }, [
+    el('h2', { text: c.name }),
+    el('p', { class: usete.length ? 'chip klar' : 'dim', text: besked }),
+    el('div', { class: 'plakater' }, c.dele.map((del) => el('div', {
+      class: `soegekort${del.denne ? ' denne' : ''}`,
+    }, [
+      del.posterPath
+        ? el('img', { class: 'plakat', src: `/api/poster/w342${del.posterPath}`,
+            alt: '', loading: 'lazy' })
+        : el('div', { class: 'plakat' }),
+      el('div', { class: 'soegekort-titel', text: del.name }),
+      el('div', { class: 'dim lille', text: [
+        del.year || '',
+        del.denne ? 'you are here' : (del.set ? 'seen' : (del.iBiblioteket ? 'in library' : '')),
+      ].filter(Boolean).join(' · ') }),
+      // Ingen knap paa den, man staar paa - og ingen paa dem, man allerede
+      // har. Kun det, der er noget at goere ved.
+      (!del.denne && !del.iBiblioteket)
+        ? el('button', { class: 'btn primary lille', text: 'Add',
+            onclick: (e) => tilfoej({ kind: 'movie', tmdbId: del.tmdbId, name: del.name }, e.target) })
+        : null,
+      (!del.denne && del.iBiblioteket)
+        ? el('button', { class: 'btn ghost lille', text: 'Open',
+            onclick: () => aabnTitel(del.id) })
+        : null,
+    ]))),
+  ]);
+}
+
+/* -------------------------------------------------------- beslaegtede */
+
+/*
+ * De LOESERE slaegtninge - genstarter og spin-offs, som en samling ikke
+ * binder sammen. For Spider-Man er det forskellen paa "2 og 3" (samlingen)
+ * og "de andre Spider-Man-film" (anbefalingerne).
+ *
+ * Hentes foerst naar man beder om det: det er ét TMDB-kald mere, og de
+ * fleste aabner en titel for at se fremdriften, ikke naboerne.
+ */
+function beslaegtedeAfsnit() {
+  const b = state.titel.beslaegtede;
+  if (b === null) {
+    return el('button', { class: 'btn ghost lille', text: 'Show related titles',
+      onclick: (e) => hentBeslaegtede(e.target) });
+  }
+  if (!b.length) return el('p', { class: 'dim lille', text: 'TMDB has nothing related.' });
+  return el('section', {}, [
+    el('h2', { text: 'Related' }),
+    el('div', { class: 'plakater' }, b.map((r) => el('div', { class: 'soegekort' }, [
+      r.poster
+        ? el('img', { class: 'plakat', src: r.poster, alt: '', loading: 'lazy' })
+        : el('div', { class: 'plakat' }),
+      el('div', { class: 'soegekort-titel', text: r.name }),
+      el('div', { class: 'dim lille', text: `${r.kind === 'tv' ? 'Series' : 'Film'}`
+        + `${r.year ? ' · ' + r.year : ''}` }),
+      r.tracked
+        ? el('button', { class: 'btn ghost lille', text: 'Open',
+            onclick: () => aabnTitel(r.id) })
+        : el('button', { class: 'btn primary lille', text: 'Add',
+            onclick: (e) => tilfoej(r, e.target) }),
+    ]))),
+  ]);
+}
+
+async function hentBeslaegtede(knap) {
+  knap.disabled = true;
+  knap.textContent = 'Loading…';
+  try {
+    const r = await api(`/related?id=${encodeURIComponent(state.titel.id)}`);
+    state.titel.beslaegtede = r.results || [];
+  } catch (err) {
+    state.titel.beslaegtede = [];
+    toast(err.message, 'fejl');
+  }
+  tegnSide();
 }

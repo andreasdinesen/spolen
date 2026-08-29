@@ -2491,3 +2491,11 @@ body.navopen .backdrop {
 
 .webhookboks { border-top: 1px solid var(--border-soft); margin-top: 16px; padding-top: 8px; }
 .webhookboks h4 { margin: 0 0 4px; }
+
+/* ---- Samlingen (efterfoelgere) ---- */
+.samling { margin: 22px 0; }
+.samling h2 { margin-bottom: 6px; }
+.samling .chip { display: inline-block; margin-bottom: 12px; }
+/* Den, man staar paa, markeres - ellers leder man efter sig selv i raekken. */
+.soegekort.denne .plakat { outline: 2px solid var(--accent); }
+.soegekort.denne .soegekort-titel { color: var(--accent-text); }
