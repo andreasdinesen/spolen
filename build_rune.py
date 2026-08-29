@@ -63,12 +63,31 @@ def app_version():
     return int(m.group(1))
 
 
+# Delte moduler, der ogsaa skal med UD I BROWSEREN.
+#
+# Serveren require'r dem; fladen faar dem lagt foerst i bundtet. Pointen er
+# ÉN definition: en regel, der findes i to kopier, driver fra hinanden, og
+# saa hedder brugeren Andreas ét sted og andreas et andet (2026-08-29).
+# Modulerne skal derfor taale baade require og at blive indsat raat - de
+# afslutter med `if (typeof module !== 'undefined' ...)`.
+DELT_I_BUNDT = ['navn.js']
+
+
 def saml_frontend():
-    """p*.js -> public/app.js, i navneorden."""
+    """shared/{DELT_I_BUNDT} + p*.js -> public/app.js, i navneorden."""
     navne = sorted(n for n in os.listdir(PARTS) if re.match(r'^p\w+\.js$', n))
     if not navne:
         fejl('ingen app/parts/p*.js at samle')
     dele = []
+    for delt in DELT_I_BUNDT:
+        sti = os.path.join(APP, 'shared', delt)
+        if not os.path.exists(sti):
+            fejl(f'shared/{delt} staar i DELT_I_BUNDT, men findes ikke')
+        with open(sti, encoding='utf8') as fh:
+            raa = fh.read()
+        # 'use strict' i toppen af et indsat modul ville gaelde HELE bundtet.
+        raa = re.sub(r"^\s*'use strict';\s*", '', raa)
+        dele.append(f'/* ---- shared/{delt} (delt med serveren) ---- */\n' + raa)
     for navn in navne:
         with open(os.path.join(PARTS, navn), encoding='utf8') as fh:
             dele.append(f'/* ---- {navn} ---- */\n' + fh.read())
@@ -82,7 +101,7 @@ def saml_frontend():
     if res.returncode != 0:
         fejl('app.js er ikke gyldig JavaScript:\n'
              + res.stderr.decode('utf8', 'replace')[:2000])
-    print(f'  app.js: {len(navne)} dele, {len(samlet):,} tegn')
+    print(f'  app.js: {len(DELT_I_BUNDT)}+{len(navne)} dele, {len(samlet):,} tegn')
     return navne
 
 

@@ -43,6 +43,9 @@ const beregn = require('./shared/beregn.js');
 const tmdb = require('./tmdb.js');
 const importer = require('./shared/import.js');
 const statistik = require('./shared/statistik.js');
+// Samme navneregel som fladen - shared/navn.js laegges ogsaa ind i app.js
+// af build_rune.py, saa der findes ÉN definition (2026-08-29).
+const { visNavn } = require('./shared/navn.js');
 const trakt = require('./trakt.js');
 const plex = require('./plex.js');
 const mcpModul = require('./mcp.js');
@@ -3277,7 +3280,7 @@ async function haandterOauth(req, res, urlPath, query) {
       sendHtml(res, 200, oauthSide('Allow access', `
         <h1>Allow access?</h1>
         <p><span class="n">${escHtml(oplysninger.klient.name)}</span> is asking to connect to
-        spolen as <span class="n">${escHtml(bruger.username)}</span>.</p>
+        spolen as <span class="n">${escHtml(visNavn(bruger.username))}</span>.</p>
         <p>It will be able to:</p><ul>${maa}</ul>
         <p>It can never see other people's libraries, and you can revoke it at any time
         under Settings → Access keys.</p>

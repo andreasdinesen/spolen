@@ -1,3 +1,39 @@
+/* ---- shared/navn.js (delt med serveren) ---- */
+/*
+ * Hvordan et brugernavn SKRIVES paa skaermen.
+ *
+ * Navnet gemmes altid med smaa bogstaver. Det er med vilje: login slaar op
+ * paa lower(username), saa "andreas", "Andreas" og "ANDREAS" er den SAMME
+ * konto, og to konti kan ikke skille sig ad paa store bogstaver alene. Den
+ * regel maa ikke roeres - den er det, der goer login utvetydigt.
+ *
+ * Men gemt form og vist form behoever ikke vaere det samme. Et navn i
+ * venstre menu skal se ud som et navn (Andreas, 2026-08-29).
+ *
+ * Ligger i shared/, fordi BAADE serveren (samtykkesiden i OAuth) og
+ * fladen skriver navne ud. To kopier ville drive fra hinanden, og saa
+ * hedder man Andreas ét sted og andreas et andet.
+ */
+
+/*
+ * Stort begyndelsesbogstav i hvert LED. Sammensatte navne er almindelige -
+ * "anne-marie" skal blive "Anne-Marie", ikke "Anne-marie".
+ *
+ * toUpperCase() klarer ae, oe og aa af sig selv; det er derfor der ikke
+ * staar en tabel over danske tegn her.
+ */
+function visNavn(navn) {
+  if (typeof navn !== 'string') return '';
+  return navn.replace(
+    /[^\s\-_.]+/gu,
+    (led) => led.charAt(0).toUpperCase() + led.slice(1)
+  );
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { visNavn };
+}
+
 /* ---- p1_core.js ---- */
 'use strict';
 /*
@@ -12,7 +48,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 10;
+const APP_VERSION = 11;
 
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
@@ -327,7 +363,7 @@ function skal(indhold) {
      * staa et sted, der altid er synligt - ikke gemt i en om-dialog.
      */
     el('div', { class: 'sidebar-foot' }, [
-      el('span', { class: 'dim lille', text: state.user ? state.user.username : '' }),
+      el('span', { class: 'dim lille', text: state.user ? visNavn(state.user.username) : '' }),
       el('button', { class: 'btn ghost lille', text: 'Sign out', onclick: async () => {
         await api('/logout', { method: 'POST' });
         state.user = null;
@@ -493,7 +529,7 @@ function delingsSide() {
 
     el('h2', { text: 'Shared with you' }),
     ind.length ? el('div', { class: 'liste' }, ind.map((d) => el('div', { class: 'item-row' }, [
-      el('strong', { text: d.owner }),
+      el('strong', { text: visNavn(d.owner) }),
       el('span', { class: 'dim', text: ' · ' + emneTekst(d) }),
       // Modtageren kan IKKE fjerne en deling. Kun ejeren bestemmer, og en
       // knap, der ikke virker, er vaerre end ingen knap.
@@ -509,7 +545,7 @@ function emneTekst(d) {
 
 function delingsRaekke(d) {
   return el('div', { class: 'item-row' }, [
-    el('strong', { text: d.grantee }),
+    el('strong', { text: visNavn(d.grantee) }),
     el('span', { class: 'dim', text: ' · ' + emneTekst(d) }),
     el('button', {
       class: 'btn ghost lille', text: 'Stop sharing',
@@ -525,7 +561,7 @@ function delingsRaekke(d) {
 
 function nyDelingFormular() {
   const person = el('select', { style: 'font-size:16px' },
-    state.people.map((p) => el('option', { value: p.id, text: p.username })));
+    state.people.map((p) => el('option', { value: p.id, text: visNavn(p.username) })));
   const emne = el('select', { style: 'font-size:16px' }, [
     el('option', { value: 'profile', text: 'Everything — my whole history' }),
     el('option', { value: 'title', text: 'One title only' }),
@@ -1020,6 +1056,17 @@ function settingsSide() {
     foldAfsnit('tjenester', 'Your streaming services', null, tjenesteAfsnit),
 
     foldAfsnit('import', 'Import your history', null, importSide),
+
+    /*
+     * Plex staar for sig selv - ikke inde under importen.
+     *
+     * Det er en LOEBENDE forbindelse (polling, webhook, watchlist, lokalt
+     * katalog), ikke et engangstrin. Inde i importafsnittet skulle man
+     * foerst aabne "Import your history" for at naa den, og den skubbede
+     * samtidig importens eget svar ned under skaermkanten
+     * (Andreas, 2026-08-29).
+     */
+    foldAfsnit('plex', 'Plex', 'plex', plexAfsnit),
 
     admin ? foldAfsnit('traktapp', 'Trakt application', 'trakt', traktAppAfsnit) : null,
 
@@ -1792,13 +1839,34 @@ function importSide() {
 
     dropZone(),
 
-    traktAfsnit(),
-    plexAfsnit(),
-
-    i.fejl ? el('p', { class: 'noeglestatus mangler', text: i.fejl }) : null,
+    /*
+     * Svaret paa et drop staar LIGE UNDER zonen - ikke under Trakt- og
+     * Plex-afsnittene, som det gjorde foer.
+     *
+     * Maalt hos Andreas 2026-08-29: analysekortet blev tegnet i y=1459 i et
+     * vindue paa 676 px, altsaa 783 px under skaermkanten, og siden rullede
+     * ikke. Zonen sagde stadig "Drop your export here". Importen HAVDE
+     * laest alle 77 filer og 8753 raekker - der var bare ingen maade at se
+     * det paa. Hver enkelt del af kaeden var maalt og virkede; det, ingen
+     * proeve daekkede, var om resultatet var SYNLIGT.
+     */
+    i.fejl ? el('p', { class: 'noeglestatus mangler importsvar', text: i.fejl }) : null,
     i.analyse ? analyseKort(i.analyse) : null,
     i.status ? importFremdrift(i.status) : null,
+
+    /*
+     * Trakt bliver HER. Device-login er ikke en forbindelse, man plejer -
+     * det er vejen ud af Sequel, altsaa en import. Plex er det modsatte og
+     * har faaet sit eget punkt (Andreas, 2026-08-29).
+     */
+    traktAfsnit(),
   ]);
+}
+
+/* "1 rows - 1 films" stod der foer. Tallet er som regel stort, saa fejlen
+   var usynlig indtil man importerede en enkelt raekke (2026-08-29). */
+function flertal(n, ental, flertalsform) {
+  return `${n} ${n === 1 ? ental : (flertalsform || ental + 's')}`;
 }
 
 function analyseKort(a) {
@@ -1810,7 +1878,7 @@ function analyseKort(a) {
   ordenValg.value = state.import.dateOrder || a.dateOrder;
   ordenValg.addEventListener('change', () => { state.import.dateOrder = ordenValg.value; });
 
-  return el('div', { class: 'card' }, [
+  return el('div', { class: 'card importsvar' }, [
     el('h3', { text: a.formatName }),
     state.import.zipNavn
       ? el('p', { class: 'dim lille', text: `From ${state.import.zipNavn}.` })
@@ -1821,7 +1889,7 @@ function analyseKort(a) {
             + (a.ignored && a.ignored.length ? `, ${a.ignored.length} skipped` : '') }),
           el('div', { class: 'liste' }, a.used.slice(0, 30).map((u) => el('div', { class: 'item-row' }, [
             el('span', { class: 'lille', text: u.navn }),
-            el('span', { class: 'dim lille', text: `${u.raekker} rows · ${u.format}` }),
+            el('span', { class: 'dim lille', text: `${flertal(u.raekker, 'row')} · ${u.format}` }),
           ]))),
           (a.ignored && a.ignored.length)
             ? el('p', { class: 'dim lille', text:
@@ -1834,9 +1902,10 @@ function analyseKort(a) {
         ])
       : null,
     el('p', { class: 'dim', text:
-      `${a.rows} rows — ${a.movies} films, ${a.episodes} episodes, ${a.shows} shows. `
-      + `${a.withDates} have a date.`
-      + (a.skipped ? ` ${a.skipped} rows could not be read.` : '') }),
+      `${flertal(a.rows, 'row')} — ${flertal(a.movies, 'film')}, `
+      + `${flertal(a.episodes, 'episode')}, ${flertal(a.shows, 'show')}. `
+      + `${a.withDates} ${a.withDates === 1 ? 'has' : 'have'} a date.`
+      + (a.skipped ? ` ${flertal(a.skipped, 'row')} could not be read.` : '') }),
 
     /*
      * Datoernes retning vises ALTID - ogsaa naar appen er sikker. Er den
@@ -1863,7 +1932,7 @@ function analyseKort(a) {
     ]))),
 
     el('div', { class: 'knaprad' }, [
-      el('button', { class: 'btn primary', text: `Import ${a.rows} rows`,
+      el('button', { class: 'btn primary', text: `Import ${flertal(a.rows, 'row')}`,
         onclick: (e) => startImport(e.target) }),
       el('button', { class: 'btn ghost', text: 'Cancel',
         onclick: () => { state.import = tomImport(); tegnSide(); } }),
@@ -1877,7 +1946,7 @@ function importFremdrift(s) {
     el('h3', { text: s.running ? 'Importing…' : 'Import finished' }),
     el('div', { class: 'fremdrift' }, [el('i', { style: `width:${pct}%` })]),
     el('p', { class: 'dim lille', text:
-      `${s.done} of ${s.total} rows · ${s.added} watches added`
+      `${s.done} of ${flertal(s.total, 'row')} · ${flertal(s.added, 'watch', 'watches')} added`
       + (s.duplicates ? `, ${s.duplicates} already there` : '')
       + (s.newTitles ? ` · ${s.newTitles} new titles fetched` : '') }),
     s.running
@@ -1888,7 +1957,7 @@ function importFremdrift(s) {
       ? el('p', { class: 'dim lille', text: 'Errors: ' + s.errors.join(' · ') }) : null,
     (s.unmatchedTotal)
       ? el('details', {}, [
-          el('summary', { text: `${s.unmatchedTotal} rows could not be matched` }),
+          el('summary', { text: `${flertal(s.unmatchedTotal, 'row')} could not be matched` }),
           el('p', { class: 'dim lille', text:
             'These are usually titles TMDB does not have, or episodes named differently '
             + 'than in the export. Nothing was written for them.' }),
@@ -1904,12 +1973,48 @@ function importFremdrift(s) {
 
 function tomImport() {
   return { tekst: '', filer: null, analyse: null, status: null, fejl: '',
-    dateOrder: null, zipNavn: null, overZonen: false };
+    dateOrder: null, zipNavn: null, overZonen: false, laeser: null };
+}
+
+/*
+ * Rul svaret frem, og kvitter for filen med det samme.
+ *
+ * En import er den ene handling i spolen, hvor der gaar flere sekunder,
+ * uden at noget aendrer sig oeverst paa skaermen. Sker der intet SYNLIGT,
+ * konkluderer man at det ikke virkede - og proever igen (Andreas,
+ * 2026-08-29).
+ */
+function rulTilImportsvar() {
+  const m = document.querySelector('.importsvar');
+  if (!m) return;
+  const synligt = () => {
+    const r = m.getBoundingClientRect();
+    return r.top >= 0 && r.bottom <= window.innerHeight;
+  };
+  // Rul kun, hvis svaret faktisk ligger uden for skaermen. Et ryk i en
+  // visning, der allerede er rigtig, er sin egen slags forvirring.
+  if (synligt()) return;
+
+  m.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  /*
+   * Og KONTROLLÉR saa, at der rent faktisk blev rullet.
+   *
+   * En bloed rulning er en animation, og en animation kan blive droppet -
+   * maalt: scrollY stod paa 0 efter 1,5 sekund, mens den samme rulning
+   * uden 'smooth' flyttede 516 px. Sker det, har brugeren praecis det
+   * problem, rettelsen skulle loese: svaret findes, og han ser det ikke.
+   * Derfor et haardt spring som reserve (2026-08-29).
+   */
+  setTimeout(() => { if (!synligt()) m.scrollIntoView({ block: 'center' }); }, 700);
 }
 
 async function laesImportFil(fil) {
   if (!fil) return;
   state.import = tomImport();
+  // Navnet vises FOER filen laeses. En zip paa en halv megabyte tager tid
+  // at pakke ud, og indtil nu sagde zonen praecis det samme hele vejen.
+  state.import.laeser = fil.name;
   tegnSide();
   try {
     // Filen laeses i BROWSEREN og sendes som tekst. Serveren parser den med
@@ -1931,7 +2036,8 @@ async function laesImportFil(fil) {
       const filer = await zipFindFiler(await fil.arrayBuffer());
       if (!filer.length) {
         state.import.fejl = 'No .csv or .json files inside that zip.';
-        tegnSide();
+        state.import.laeser = null;
+        tegnSide(); rulTilImportsvar();
         return;
       }
       const samlet = filer.reduce((n, f) => n + f.tekst.length, 0);
@@ -1939,7 +2045,8 @@ async function laesImportFil(fil) {
       // teksten ~15 % stoerre paa traaden.
       if (samlet > 30 * 1024 * 1024) {
         state.import.fejl = 'That export unpacks to more than 30 MB — too big to import in one go.';
-        tegnSide();
+        state.import.laeser = null;
+        tegnSide(); rulTilImportsvar();
         return;
       }
       try {
@@ -1951,13 +2058,15 @@ async function laesImportFil(fil) {
       } catch (err) {
         state.import.fejl = err.message;
       }
-      tegnSide();
+      state.import.laeser = null;
+      tegnSide(); rulTilImportsvar();
       return;
     }
     tekst = await fil.text();
     if (tekst.length > 20 * 1024 * 1024) {
       state.import.fejl = 'That file is larger than 20 MB.';
-      tegnSide();
+      state.import.laeser = null;
+      tegnSide(); rulTilImportsvar();
       return;
     }
     state.import.tekst = tekst;
@@ -1967,7 +2076,9 @@ async function laesImportFil(fil) {
   } catch (err) {
     state.import.fejl = err.message;
   }
+  state.import.laeser = null;
   tegnSide();
+  rulTilImportsvar();
 }
 
 async function startImport(knap) {
@@ -2717,8 +2828,12 @@ function dropZone() {
     onclick: () => felt.click(),
     onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); felt.click(); } },
   }, [
-    el('div', { class: 'dropzone-tekst', text: 'Drop your export here' }),
-    el('div', { class: 'dim lille', text: 'or click to choose — .zip, .csv or .json' }),
+    el('div', { class: 'dropzone-tekst', text: state.import.laeser
+      ? `Reading ${state.import.laeser}…`
+      : 'Drop your export here' }),
+    el('div', { class: 'dim lille', text: state.import.laeser
+      ? 'Unpacking and checking what is inside — this takes a moment.'
+      : 'or click to choose — .zip, .csv or .json' }),
     felt,
   ]);
 }

@@ -30,6 +30,17 @@ function settingsSide() {
 
     foldAfsnit('import', 'Import your history', null, importSide),
 
+    /*
+     * Plex staar for sig selv - ikke inde under importen.
+     *
+     * Det er en LOEBENDE forbindelse (polling, webhook, watchlist, lokalt
+     * katalog), ikke et engangstrin. Inde i importafsnittet skulle man
+     * foerst aabne "Import your history" for at naa den, og den skubbede
+     * samtidig importens eget svar ned under skaermkanten
+     * (Andreas, 2026-08-29).
+     */
+    foldAfsnit('plex', 'Plex', 'plex', plexAfsnit),
+
     admin ? foldAfsnit('traktapp', 'Trakt application', 'trakt', traktAppAfsnit) : null,
 
     foldAfsnit('notifik', 'Notifications', null, notifikationAfsnit),

@@ -143,7 +143,7 @@ function skal(indhold) {
      * staa et sted, der altid er synligt - ikke gemt i en om-dialog.
      */
     el('div', { class: 'sidebar-foot' }, [
-      el('span', { class: 'dim lille', text: state.user ? state.user.username : '' }),
+      el('span', { class: 'dim lille', text: state.user ? visNavn(state.user.username) : '' }),
       el('button', { class: 'btn ghost lille', text: 'Sign out', onclick: async () => {
         await api('/logout', { method: 'POST' });
         state.user = null;
@@ -309,7 +309,7 @@ function delingsSide() {
 
     el('h2', { text: 'Shared with you' }),
     ind.length ? el('div', { class: 'liste' }, ind.map((d) => el('div', { class: 'item-row' }, [
-      el('strong', { text: d.owner }),
+      el('strong', { text: visNavn(d.owner) }),
       el('span', { class: 'dim', text: ' · ' + emneTekst(d) }),
       // Modtageren kan IKKE fjerne en deling. Kun ejeren bestemmer, og en
       // knap, der ikke virker, er vaerre end ingen knap.
@@ -325,7 +325,7 @@ function emneTekst(d) {
 
 function delingsRaekke(d) {
   return el('div', { class: 'item-row' }, [
-    el('strong', { text: d.grantee }),
+    el('strong', { text: visNavn(d.grantee) }),
     el('span', { class: 'dim', text: ' · ' + emneTekst(d) }),
     el('button', {
       class: 'btn ghost lille', text: 'Stop sharing',
@@ -341,7 +341,7 @@ function delingsRaekke(d) {
 
 function nyDelingFormular() {
   const person = el('select', { style: 'font-size:16px' },
-    state.people.map((p) => el('option', { value: p.id, text: p.username })));
+    state.people.map((p) => el('option', { value: p.id, text: visNavn(p.username) })));
   const emne = el('select', { style: 'font-size:16px' }, [
     el('option', { value: 'profile', text: 'Everything — my whole history' }),
     el('option', { value: 'title', text: 'One title only' }),
