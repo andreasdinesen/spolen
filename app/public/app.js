@@ -12,7 +12,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 9;
+const APP_VERSION = 10;
 
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
@@ -608,6 +608,7 @@ async function indlaes() {
     tilslutSkrivForAtSoege();
     tilslutNav();
     tilslutServiceWorker();
+    tilslutSideDrop();
     // Serveren udleverer ogsaa sin egen version. Stemmer den ikke med den her
     // fil, sidder der en gammel app.js i cachen - og saa fejlsoeger man kode,
     // der ikke er indlaest (§5).
@@ -1783,7 +1784,6 @@ async function hentKalender() {
 function importSide() {
   const i = state.import;
   return el('div', {}, [
-    el('h2', { text: 'Import your history' }),
     el('p', { class: 'dim lille', text:
       'Drop a Trakt export straight from Downloads — the whole .zip, unopened. '
       + 'Also takes Netflix viewing activity, Letterboxd, IMDb and TV Time as '
@@ -2721,6 +2721,43 @@ function dropZone() {
     el('div', { class: 'dim lille', text: 'or click to choose — .zip, .csv or .json' }),
     felt,
   ]);
+}
+
+/*
+ * Tag ogsaa imod et drop, der lander UDEN FOR zonen.
+ *
+ * Rammer man ved siden af - paa marginen, overskriften eller den tomme
+ * plads - aeder browseren filen og aabner den i stedet, og for brugeren
+ * ligner det, at intet skete. Zonen er stadig maalet, men hele siden tager
+ * imod (Andreas, 2026-08-29: kunne ikke faa sin zip ind, og hver enkelt del
+ * af kaeden virkede maalt for sig).
+ */
+function tilslutSideDrop() {
+  if (window.__spolenDrop) return;      // kun én gang pr. indlaesning
+  window.__spolenDrop = true;
+  document.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files')) e.preventDefault();
+  });
+  document.addEventListener('drop', (e) => {
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+    e.preventDefault();
+    // Ramte man zonen, har DENS handler allerede taget den.
+    if (e.target.closest && e.target.closest('.dropzone')) return;
+    /*
+     * Landede filen et andet sted, foerer vi brugeren hen til importen i
+     * stedet for at afvise den. Det er den eneste ting, man kan slippe en
+     * fil paa i spolen, saa hensigten er ikke til at tage fejl af.
+     */
+    state.view = 'settings';
+    try {
+      const foldet = JSON.parse(localStorage.getItem('spolen_foldet') || '{}');
+      foldet.import = false;
+      localStorage.setItem('spolen_foldet', JSON.stringify(foldet));
+    } catch { /* uden lager aabnes afsnittet bare ikke af sig selv */ }
+    tegnSide();
+    laesImportFil(f);
+  });
 }
 
 /* Kun KLASSEN skiftes. En gentegning af hele siden midt i et traek ville

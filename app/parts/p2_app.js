@@ -424,6 +424,7 @@ async function indlaes() {
     tilslutSkrivForAtSoege();
     tilslutNav();
     tilslutServiceWorker();
+    tilslutSideDrop();
     // Serveren udleverer ogsaa sin egen version. Stemmer den ikke med den her
     // fil, sidder der en gammel app.js i cachen - og saa fejlsoeger man kode,
     // der ikke er indlaest (§5).
