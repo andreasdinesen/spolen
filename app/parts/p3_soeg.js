@@ -369,8 +369,35 @@ function bibliotekSide() {
    * flyder, fordi flyderne foerst dukker op, naar man har rullet - og man
    * skal kunne vaelge visning, foer man goer det (Andreas, 2026-08-29).
    */
-  const gitter = el('div', { class: `plakater${erKompakt() ? ' kompakt' : ''}` },
-    raekker.map(bibliotekKort));
+  /*
+   * Titlerne grupperes efter forbogstav, med en overskrift foran hver gruppe.
+   *
+   * Overskriften spaender hele gitterrækken (grid-column: 1 / -1), saa den
+   * ikke stjaeler en plads fra plakaterne. Den er samtidig det ANKER,
+   * bogstavskinnen springer til - som i Bogreolen (Andreas, 2026-08-29).
+   *
+   * Raekkefoelgen kommer fra serveren, som allerede sorterer paa navn. Vi
+   * grupperer bare det, der kommer - saa kan skinnen ikke komme i utakt med
+   * listen.
+   */
+  const grupper = [];
+  for (const r of raekker) {
+    const b = forbogstav(r.title.name);
+    if (!grupper.length || grupper[grupper.length - 1].bogstav !== b) {
+      grupper.push({ bogstav: b, raekker: [] });
+    }
+    grupper[grupper.length - 1].raekker.push(r);
+  }
+
+  const gitterboern = [];
+  for (const g of grupper) {
+    gitterboern.push(el('div', {
+      class: 'bogstavhoved', id: `bogstav-${g.bogstav}`, text: g.bogstav,
+    }));
+    for (const r of g.raekker) gitterboern.push(bibliotekKort(r));
+  }
+
+  const gitter = el('div', { class: `plakater${erKompakt() ? ' kompakt' : ''}` }, gitterboern);
 
   /*
    * `bredside`: fyld den plads, der ER.
@@ -391,7 +418,63 @@ function bibliotekSide() {
     raekker.length
       ? gitter
       : el('p', { class: 'dim', text: 'Nothing of that kind yet.' }),
+    // Skinnen ligger fast i hoejre kant, saa den maa gerne staa sidst i
+    // dokumentet - den er ude af flowet alligevel.
+    grupper.length > 1 ? bogstavSkinne(grupper) : null,
   ]);
+}
+
+/*
+ * Hvilket bogstav en titel hoerer under.
+ *
+ * Tal samles under '#': "12 Years a Slave" og "2067" hoerer sammen, og en
+ * skinne med ti cifre foran bogstaverne er mest stoej.
+ *
+ * AE, OE og AA staar for sig selv - de ER bogstaver paa dansk, og at folde
+ * dem sammen med A og O ville sende "OErkenens SOEnner" hen under O, hvor
+ * ingen leder efter den.
+ */
+function forbogstav(navn) {
+  const t = String(navn || '').trim();
+  if (!t) return '#';
+  const c = t[0].toUpperCase();
+  return /[0-9]/.test(c) ? '#' : c;
+}
+
+/*
+ * Bogstavskinnen i hoejre kant.
+ *
+ * Med hundredvis af titler er den eneste vej til "S" ellers at rulle - og
+ * paa en telefon er det mange strygninger (§9b).
+ */
+function bogstavSkinne(grupper) {
+  return el('div', { class: 'bogstavskinne', 'aria-label': 'Jump to a letter' },
+    grupper.map((g) => el('button', {
+      class: 'bogstavknap', 'data-bogstav': g.bogstav,
+      title: `Jump to ${g.bogstav}`,
+      text: g.bogstav,
+      onclick: () => hopTilBogstav(g.bogstav),
+    })));
+}
+
+/*
+ * Spring til et bogstav.
+ *
+ * Toplinjen er klaebende, saa der trækkes dens hoejde fra - ellers lander
+ * overskriften LIGE bag soegefeltet, og man tror, springet ramte forkert.
+ *
+ * Og som ved importen og "til toppen": en bloed rulning er en animation og
+ * kan blive droppet, saa der kontrolleres bagefter (2026-08-29).
+ */
+function hopTilBogstav(bogstav) {
+  const maal = document.getElementById(`bogstav-${bogstav}`);
+  if (!maal) return;
+  const bjaelke = document.querySelector('.topbar');
+  const luft = (bjaelke ? bjaelke.getBoundingClientRect().height : 0) + 12;
+  // rullePosition(), ikke window.scrollY: paa en telefon er det <body>, der
+  // ruller, og vinduet staar paa 0 uanset hvor langt nede man er.
+  const y = Math.max(0, maal.getBoundingClientRect().top + rullePosition() - luft);
+  rulTil(y, true);
 }
 
 function bibliotekKort(raekke) {

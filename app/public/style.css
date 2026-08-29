@@ -2782,3 +2782,98 @@ button.version-linje.gammel:hover { text-decoration: underline; }
 /* Sider, der skal bruge hele bredden. .main centrerer sine boern
    (align-items: center), saa uden det her krymper indholdet til sig selv. */
 .bredside { width: 100%; }
+
+/* Tilbage-knappen til venstre, "fjern" helt ude til hoejre - saa de to ikke
+   kan forveksles i et hurtigt tryk. */
+.titelrad { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.titelrad .fjernknap { margin-left: auto; color: var(--muted); }
+.titelrad .fjernknap:hover { color: var(--danger, #b4462f); border-color: currentColor; }
+
+/* ------------------------------------------------ bogstaver i biblioteket */
+
+/*
+ * Overskriften spaender HELE gitterraekken. Uden `1 / -1` ville den optage
+ * én celle og skubbe plakaterne ud af takt.
+ */
+.bogstavhoved {
+  grid-column: 1 / -1;
+  font-weight: 800;
+  font-size: 13px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 4px;
+  margin: 18px 0 2px;
+  /* Toplinjen klaeber - uden det her lander overskriften bag soegefeltet,
+     naar man springer til den. */
+  scroll-margin-top: 90px;
+}
+
+.plakater > .bogstavhoved:first-child { margin-top: 0; }
+.plakater.kompakt .bogstavhoved { margin: 14px 0 2px; }
+
+/*
+ * Skinnen i hoejre kant (§9b).
+ *
+ * Venstre polstring er en usynlig gribeflade i sidens margen - man rammer
+ * den uden at pege praecist, og den ligger IKKE hen over indholdet.
+ */
+.bogstavskinne {
+  position: fixed;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 8px 4px 8px 16px;
+  max-height: 74vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  transition: background .14s, border-color .14s;
+}
+
+.bogstavskinne::-webkit-scrollbar { display: none; }
+.bogstavskinne:hover { background: var(--card); border-color: var(--border); box-shadow: var(--shadow); }
+
+.bogstavknap {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  padding: 1px 5px;
+  border-radius: 5px;
+  cursor: pointer;
+  /* Ingen hover paa en telefon - de skal kunne laeses uden. */
+  opacity: .8;
+}
+
+.bogstavknap:hover { opacity: 1; color: var(--accent-text); background: var(--accent-soft); }
+
+/* Flyderne skal fri af skinnen, saa de ikke ligger oven i hinanden. */
+@media (min-width: 901px) {
+  .flydeknap { right: 46px; }
+  .flydeknap.kompaktknap { right: 98px; }
+}
+
+/* Paa en telefon er skinnen mest vaerd - listen er lang og skaermen kort -
+   men den skal vaere smal og altid laesbar. */
+@media (max-width: 900px) {
+  .bogstavskinne {
+    right: 1px;
+    padding: 6px 2px 6px 10px;
+    max-height: 56vh;                 /* slutter over de flydende knapper */
+    background: var(--card);
+    border-color: var(--border-soft);
+  }
+  .bogstavknap { font-size: 10px; padding: 1px 3px; opacity: .85; }
+  /* Plads, saa skinnen aldrig daekker en titel. */
+  .plakater { padding-right: 22px; }
+}

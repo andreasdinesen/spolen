@@ -31,8 +31,13 @@ function titelSide() {
   const p = t.data.progress;
 
   return el('div', {}, [
-    el('button', { class: 'btn ghost lille', text: '← Library',
-      onclick: () => { state.view = 'library'; tegnSide(); } }),
+    el('div', { class: 'titelrad' }, [
+      el('button', { class: 'btn ghost lille', text: '← Library',
+        onclick: () => { state.view = 'library'; tegnSide(); } }),
+      // Kun paa noget, man FAKTISK har. Ellers ville knappen love at fjerne
+      // en titel, der ikke er der.
+      t.data.tracking ? fjernFraBiblioteket(t.data) : null,
+    ]),
     el('div', { class: 'titelhoved' }, [
       titel.posterPath
         ? el('img', { class: 'plakat', src: `/api/poster/w342${titel.posterPath}`, alt: '' })
@@ -243,6 +248,77 @@ async function genindlaesTitel(titleId) {
   state.titel.beslaegtede = beslaegtede;
   await Promise.all([hentUpNext(), hentBibliotek()]);
   tegnSide();
+}
+
+/*
+ * Fjern en titel fra biblioteket igen.
+ *
+ * Skal virke, uanset om titlen bare er tilfoejet eller ogsaa er markeret
+ * set (Andreas, 2026-08-29). Og det er netop DÉR, spoergsmaalet bliver
+ * svaert: historikken er ikke det samme som biblioteket.
+ *
+ * Derfor tre svar, ikke to:
+ *
+ *   - Fjern, og BEHOLD historikken. Standarden. Titlen forsvinder fra
+ *     biblioteket, men det, man har set, taeller stadig i statistikken. At
+ *     rydde op i sit bibliotek maa ikke stille og roligt slette aar af
+ *     historik.
+ *   - Fjern ALT, ogsaa historikken. Findes, fordi den anden vej ikke kan
+ *     naas bagefter: er titlen foerst vaek fra biblioteket, er der ingen
+ *     side at gaa ind paa for at rydde historikken.
+ *   - Fortryd.
+ *
+ * Bedoemmelse og note bliver staaende. De hoerer ikke til "biblioteket", og
+ * tilfoejer man titlen igen, er de der stadig.
+ */
+function fjernFraBiblioteket(d) {
+  const navn = d.title.name;
+  // Hvor meget historik er der? En serie taeller afsnit, en film gange.
+  const antal = d.progress ? d.progress.sete : (d.watched || []).length;
+
+  return el('button', {
+    class: 'btn ghost lille fjernknap', text: 'Remove from library',
+    onclick: async (e) => {
+      const valg = antal
+        ? await spoerg('Remove from library?',
+            `${navn} will be removed from your library. You have ${antal} `
+            + `${antal === 1 ? 'viewing' : 'viewings'} recorded — that history counts `
+            + 'towards your statistics. Once the title is gone you cannot get back '
+            + 'to this page to clear it.',
+            [
+              { id: 'behold', text: 'Remove, keep history', primary: true },
+              { id: 'alt', text: 'Remove and delete history' },
+              { id: 'fortryd', text: 'Cancel' },
+            ])
+        : await spoerg('Remove from library?',
+            `${navn} will be removed from your library. You can add it again at any time.`,
+            [
+              { id: 'behold', text: 'Remove', primary: true },
+              { id: 'fortryd', text: 'Cancel' },
+            ]);
+      if (valg === 'fortryd') return;
+
+      e.target.disabled = true;
+      try {
+        /*
+         * Historikken FOERST. Gaar noget galt undervejs, staar titlen stadig
+         * i biblioteket - og saa kan man proeve igen. Den omvendte orden
+         * ville efterlade en historik uden en side at rydde den fra.
+         */
+        if (valg === 'alt') {
+          await api(`/watches/title/${encodeURIComponent(d.title.id)}`, { method: 'DELETE' });
+        }
+        await api(`/items/${encodeURIComponent(d.tracking.id)}`, { method: 'DELETE' });
+        toast(`${navn} removed.`);
+        state.view = 'library';
+        await Promise.all([hentUpNext(), hentBibliotek()]);
+        tegnSide();
+      } catch (err) {
+        e.target.disabled = false;
+        toast(err.message, 'fejl');
+      }
+    },
+  });
 }
 
 /* ------------------------------------------------------------- dialog */

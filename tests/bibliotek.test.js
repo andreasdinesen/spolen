@@ -44,9 +44,19 @@ test('BEGGE kompaktknapper har en handler', () => {
  */
 test('rullelytteren kan ikke gaa i baglaas', () => {
   const start = APP.indexOf('function tilslutFlydere');
-  const krop = APP.slice(start, APP.indexOf('\n}', APP.indexOf('window.addEventListener(\'scroll\'', start)));
+  /* Udklipningen ledte foer efter `window.addEventListener` - da lytteren
+     flyttede til document, gav indexOf -1, og slicen blev TOM. Proeven var
+     roed uden at koden fejlede noget (2026-08-29). */
+  const lytter = APP.indexOf("addEventListener('scroll', opdater", start);
+  assert.notStrictEqual(lytter, -1, 'rullelytteren findes ikke i tilslutFlydere');
+  const krop = APP.slice(start, APP.indexOf('\n}', lytter));
 
-  assert.match(krop, /window\.addEventListener\('scroll', opdater/,
+  /*
+   * Lytteren flyttede til document + capture i v16, fordi <body> ruller paa
+   * en telefon og en rullehaendelse derfra aldrig naar window. Egenskaben,
+   * proeven passer paa, er den samme: opdateringen skal kaldes DIREKTE.
+   */
+  assert.match(krop, /addEventListener\('scroll', opdater/,
     'rullelytteren kalder ikke opdateringen direkte');
   assert.ok(!/venter\s*=\s*true/.test(krop),
     'der er en drosling med et flag igen - den kan gaa i baglaas, hvis rAF ikke fyrer');
@@ -79,11 +89,19 @@ test('flydeknappernes synlighed afhaenger ikke af en animation', () => {
 test('til-toppen kontrollerer, at der faktisk blev rullet', () => {
   const i = APP.indexOf("id: 'tilToppen'");
   const krop = APP.slice(i, i + 900);
-  assert.match(krop, /behavior: 'smooth'/, 'den bloede rulning er væk');
-  /* [^)]* kan ikke krydse parentesen i `() =>`, saa foerste udgave af den her
-     linje var roed, selv om reserven stod der. Proeven maalte sit eget
-     moenster, ikke koden (2026-08-29). */
-  assert.match(krop, /setTimeout\([\s\S]*window\.scrollY > 0[\s\S]*scrollTo\(0, 0\)/,
+  assert.match(krop, /rulTil\(0, true\)/,
+    '"til toppen" ruller ikke gennem den faelles hjaelper');
+
+  /*
+   * Reserven bor nu i rulTil(), ikke i knappen. Egenskaben er den samme: en
+   * bloed rulning er en animation og kan blive droppet, saa der skal
+   * kontrolleres bagefter.
+   */
+  const j = APP.indexOf('function rulTil');
+  assert.notStrictEqual(j, -1, 'rulTil findes ikke');
+  const hjaelper = APP.slice(j, APP.indexOf('\n}', j));
+  assert.match(hjaelper, /behavior: 'smooth'/, 'den bloede rulning er væk');
+  assert.match(hjaelper, /setTimeout\([\s\S]*rullePosition\(\) - y\) > 4[\s\S]*scrollTo\(0, y\)/,
     'der er ingen reserve, hvis den bloede rulning aldrig koerer');
 });
 

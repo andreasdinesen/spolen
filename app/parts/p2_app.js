@@ -95,14 +95,50 @@ const SIDER = [
    */
 ];
 
+/*
+ * HVEM ruller egentlig?
+ *
+ * Paa en bred skaerm er det dokumentet. Paa en telefon har <body> sin egen
+ * hoejde og `overflow-y: auto`, saa det er BODY, der ruller - dokumentet
+ * staar stille, og window.scrollY er 0 uanset hvor langt man er nede.
+ *
+ * Maalt 2026-08-29: paa 375px var body 9712px indhold i en 812px boks, mens
+ * window.scrollY blev paa 0. Alt, der spurgte vinduet - de flydende knapper,
+ * "til toppen", springet til et bogstav - virkede derfor slet ikke paa
+ * telefonen. Netop den skaerm, hvor de er mest vaerd.
+ */
+function rulleBeholder() {
+  const d = document.scrollingElement || document.documentElement;
+  return d.scrollHeight > d.clientHeight ? d : document.body;
+}
+
+/** Hvor langt er der rullet - uanset hvem der ruller. */
+function rullePosition() {
+  return rulleBeholder().scrollTop || window.scrollY || 0;
+}
+
+/** Rul til en position i den beholder, der faktisk ruller. */
+function rulTil(y, bloedt) {
+  const b = rulleBeholder();
+  if (bloedt) {
+    b.scrollTo({ top: y, behavior: 'smooth' });
+    /*
+     * ...og kontrollér. En bloed rulning er en animation og kan blive
+     * droppet - maalt baade her, ved importen og ved "til toppen".
+     */
+    setTimeout(() => { if (Math.abs(rullePosition() - y) > 4) b.scrollTo(0, y); }, 700);
+    return;
+  }
+  b.scrollTo(0, y);
+}
+
 function skal(indhold) {
   const rod = $('#root');
   // Husk rullepositionen ved gentegning af SAMME side. Et fast scrollTo(0,0)
   // sender brugeren til toppen, hver gang en afkrydsning gemmer og gentegner
   // (Beanledger v24).
   const samme = rod.dataset.view === state.view;
-  const sc = document.scrollingElement.scrollHeight > document.scrollingElement.clientHeight
-    ? document.scrollingElement : document.body;
+  const sc = rulleBeholder();
   const gemtRul = samme ? sc.scrollTop : 0;
 
   rod.textContent = '';
@@ -276,10 +312,7 @@ function tilslutFlydere() {
      * IKKE fokus i soegefeltet undervejs: paa en telefon ville tastaturet
      * springe frem, og det er ikke det, man beder om.
      */
-    onclick: () => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      setTimeout(() => { if (window.scrollY > 0) window.scrollTo(0, 0); }, 700);
-    },
+    onclick: () => rulTil(0, true),
   }, [ikon(IKONER.op, { stoerrelse: 19 })]);
 
   const komp = el('button', {
@@ -307,7 +340,7 @@ function tilslutFlydere() {
    */
   const opdater = () => {
     // 600px: langt nok nede til, at vejen tilbage er besvaerlig.
-    const vis = window.scrollY > 600;
+    const vis = rullePosition() > 600;
     // Skifteren hoerer kun hjemme, hvor der ER et gitter at skifte.
     const harGitter = !!document.querySelector('.plakater');
     for (const k of [top, komp]) {
@@ -326,7 +359,14 @@ function tilslutFlydere() {
       }
     }
   };
-  window.addEventListener('scroll', opdater, { passive: true });
+  /*
+   * Lyt paa DOKUMENTET i capture-fasen.
+   *
+   * En rullehaendelse fra et element bobler ikke, men den fanges i capture
+   * paa vej ned. Saa virker det, uanset om det er vinduet eller <body>, der
+   * ruller - og det skifter med skaermbredden.
+   */
+  document.addEventListener('scroll', opdater, { passive: true, capture: true });
   opdater();
 }
 

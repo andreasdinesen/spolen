@@ -1619,6 +1619,22 @@ function sletWatch(userId, id) {
 }
 
 /** Fjerner markeringen af ét afsnit, uanset hvornaar det blev set. */
+/**
+ * Fjern ALT, hvad brugeren har set af én titel.
+ *
+ * Findes fordi en serie kan have hundredvis af afsnit: at fjerne dem ét ad
+ * gangen ville vaere lige saa mange kald, og halvvejs igennem ville
+ * historikken staa i en tilstand, ingen har bedt om (Andreas, 2026-08-29).
+ *
+ * user_id staar i WHERE - som alle andre steder. At fjerne en titel fra
+ * SIT eget bibliotek maa aldrig kunne roere en andens historik.
+ */
+function sletTitelsWatches(userId, titleId) {
+  const res = db.prepare('DELETE FROM watches WHERE user_id = ? AND title_id = ?')
+    .run(userId, String(titleId));
+  return res.changes;
+}
+
 function afmarkerAfsnit(userId, titleId, episodeId) {
   const res = db.prepare(
     'DELETE FROM watches WHERE user_id = ? AND title_id = ? AND episode_id IS ?')
@@ -4995,6 +5011,21 @@ const MOENSTRE = [
       }
       const n = afmarkerAfsnit(g.user.id, titleId, episodeId);
       sendJson(res, 200, { ok: true, fjernet: n });
+    },
+  },
+  {
+    /*
+     * Hele historikken for ÉN titel.
+     *
+     * Ligger FOER /api/watches/:id, som ikke tillader skraastreg i sit id og
+     * derfor ikke kan snuppe den her sti - men raekkefoelgen skrives ned,
+     * saa den ikke bliver byttet om ved et uheld.
+     */
+    metode: 'DELETE', re: /^\/api\/watches\/title\/([A-Za-z0-9:_-]{1,80})$/,
+    kald: (req, res, ctx) => {
+      const g = godkend(req, res, 'write');
+      if (!g) return;
+      sendJson(res, 200, { ok: true, fjernet: sletTitelsWatches(g.user.id, ctx.params[0]) });
     },
   },
   {

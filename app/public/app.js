@@ -122,7 +122,7 @@ if (typeof module !== 'undefined' && module.exports) {
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 15;
+const APP_VERSION = 16;
 
 /* ---------------------------------------------------------------- tema */
 
@@ -424,14 +424,50 @@ const SIDER = [
    */
 ];
 
+/*
+ * HVEM ruller egentlig?
+ *
+ * Paa en bred skaerm er det dokumentet. Paa en telefon har <body> sin egen
+ * hoejde og `overflow-y: auto`, saa det er BODY, der ruller - dokumentet
+ * staar stille, og window.scrollY er 0 uanset hvor langt man er nede.
+ *
+ * Maalt 2026-08-29: paa 375px var body 9712px indhold i en 812px boks, mens
+ * window.scrollY blev paa 0. Alt, der spurgte vinduet - de flydende knapper,
+ * "til toppen", springet til et bogstav - virkede derfor slet ikke paa
+ * telefonen. Netop den skaerm, hvor de er mest vaerd.
+ */
+function rulleBeholder() {
+  const d = document.scrollingElement || document.documentElement;
+  return d.scrollHeight > d.clientHeight ? d : document.body;
+}
+
+/** Hvor langt er der rullet - uanset hvem der ruller. */
+function rullePosition() {
+  return rulleBeholder().scrollTop || window.scrollY || 0;
+}
+
+/** Rul til en position i den beholder, der faktisk ruller. */
+function rulTil(y, bloedt) {
+  const b = rulleBeholder();
+  if (bloedt) {
+    b.scrollTo({ top: y, behavior: 'smooth' });
+    /*
+     * ...og kontrollér. En bloed rulning er en animation og kan blive
+     * droppet - maalt baade her, ved importen og ved "til toppen".
+     */
+    setTimeout(() => { if (Math.abs(rullePosition() - y) > 4) b.scrollTo(0, y); }, 700);
+    return;
+  }
+  b.scrollTo(0, y);
+}
+
 function skal(indhold) {
   const rod = $('#root');
   // Husk rullepositionen ved gentegning af SAMME side. Et fast scrollTo(0,0)
   // sender brugeren til toppen, hver gang en afkrydsning gemmer og gentegner
   // (Beanledger v24).
   const samme = rod.dataset.view === state.view;
-  const sc = document.scrollingElement.scrollHeight > document.scrollingElement.clientHeight
-    ? document.scrollingElement : document.body;
+  const sc = rulleBeholder();
   const gemtRul = samme ? sc.scrollTop : 0;
 
   rod.textContent = '';
@@ -605,10 +641,7 @@ function tilslutFlydere() {
      * IKKE fokus i soegefeltet undervejs: paa en telefon ville tastaturet
      * springe frem, og det er ikke det, man beder om.
      */
-    onclick: () => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      setTimeout(() => { if (window.scrollY > 0) window.scrollTo(0, 0); }, 700);
-    },
+    onclick: () => rulTil(0, true),
   }, [ikon(IKONER.op, { stoerrelse: 19 })]);
 
   const komp = el('button', {
@@ -636,7 +669,7 @@ function tilslutFlydere() {
    */
   const opdater = () => {
     // 600px: langt nok nede til, at vejen tilbage er besvaerlig.
-    const vis = window.scrollY > 600;
+    const vis = rullePosition() > 600;
     // Skifteren hoerer kun hjemme, hvor der ER et gitter at skifte.
     const harGitter = !!document.querySelector('.plakater');
     for (const k of [top, komp]) {
@@ -655,7 +688,14 @@ function tilslutFlydere() {
       }
     }
   };
-  window.addEventListener('scroll', opdater, { passive: true });
+  /*
+   * Lyt paa DOKUMENTET i capture-fasen.
+   *
+   * En rullehaendelse fra et element bobler ikke, men den fanges i capture
+   * paa vej ned. Saa virker det, uanset om det er vinduet eller <body>, der
+   * ruller - og det skifter med skaermbredden.
+   */
+  document.addEventListener('scroll', opdater, { passive: true, capture: true });
   opdater();
 }
 
@@ -1426,8 +1466,35 @@ function bibliotekSide() {
    * flyder, fordi flyderne foerst dukker op, naar man har rullet - og man
    * skal kunne vaelge visning, foer man goer det (Andreas, 2026-08-29).
    */
-  const gitter = el('div', { class: `plakater${erKompakt() ? ' kompakt' : ''}` },
-    raekker.map(bibliotekKort));
+  /*
+   * Titlerne grupperes efter forbogstav, med en overskrift foran hver gruppe.
+   *
+   * Overskriften spaender hele gitterrækken (grid-column: 1 / -1), saa den
+   * ikke stjaeler en plads fra plakaterne. Den er samtidig det ANKER,
+   * bogstavskinnen springer til - som i Bogreolen (Andreas, 2026-08-29).
+   *
+   * Raekkefoelgen kommer fra serveren, som allerede sorterer paa navn. Vi
+   * grupperer bare det, der kommer - saa kan skinnen ikke komme i utakt med
+   * listen.
+   */
+  const grupper = [];
+  for (const r of raekker) {
+    const b = forbogstav(r.title.name);
+    if (!grupper.length || grupper[grupper.length - 1].bogstav !== b) {
+      grupper.push({ bogstav: b, raekker: [] });
+    }
+    grupper[grupper.length - 1].raekker.push(r);
+  }
+
+  const gitterboern = [];
+  for (const g of grupper) {
+    gitterboern.push(el('div', {
+      class: 'bogstavhoved', id: `bogstav-${g.bogstav}`, text: g.bogstav,
+    }));
+    for (const r of g.raekker) gitterboern.push(bibliotekKort(r));
+  }
+
+  const gitter = el('div', { class: `plakater${erKompakt() ? ' kompakt' : ''}` }, gitterboern);
 
   /*
    * `bredside`: fyld den plads, der ER.
@@ -1448,7 +1515,63 @@ function bibliotekSide() {
     raekker.length
       ? gitter
       : el('p', { class: 'dim', text: 'Nothing of that kind yet.' }),
+    // Skinnen ligger fast i hoejre kant, saa den maa gerne staa sidst i
+    // dokumentet - den er ude af flowet alligevel.
+    grupper.length > 1 ? bogstavSkinne(grupper) : null,
   ]);
+}
+
+/*
+ * Hvilket bogstav en titel hoerer under.
+ *
+ * Tal samles under '#': "12 Years a Slave" og "2067" hoerer sammen, og en
+ * skinne med ti cifre foran bogstaverne er mest stoej.
+ *
+ * AE, OE og AA staar for sig selv - de ER bogstaver paa dansk, og at folde
+ * dem sammen med A og O ville sende "OErkenens SOEnner" hen under O, hvor
+ * ingen leder efter den.
+ */
+function forbogstav(navn) {
+  const t = String(navn || '').trim();
+  if (!t) return '#';
+  const c = t[0].toUpperCase();
+  return /[0-9]/.test(c) ? '#' : c;
+}
+
+/*
+ * Bogstavskinnen i hoejre kant.
+ *
+ * Med hundredvis af titler er den eneste vej til "S" ellers at rulle - og
+ * paa en telefon er det mange strygninger (§9b).
+ */
+function bogstavSkinne(grupper) {
+  return el('div', { class: 'bogstavskinne', 'aria-label': 'Jump to a letter' },
+    grupper.map((g) => el('button', {
+      class: 'bogstavknap', 'data-bogstav': g.bogstav,
+      title: `Jump to ${g.bogstav}`,
+      text: g.bogstav,
+      onclick: () => hopTilBogstav(g.bogstav),
+    })));
+}
+
+/*
+ * Spring til et bogstav.
+ *
+ * Toplinjen er klaebende, saa der trækkes dens hoejde fra - ellers lander
+ * overskriften LIGE bag soegefeltet, og man tror, springet ramte forkert.
+ *
+ * Og som ved importen og "til toppen": en bloed rulning er en animation og
+ * kan blive droppet, saa der kontrolleres bagefter (2026-08-29).
+ */
+function hopTilBogstav(bogstav) {
+  const maal = document.getElementById(`bogstav-${bogstav}`);
+  if (!maal) return;
+  const bjaelke = document.querySelector('.topbar');
+  const luft = (bjaelke ? bjaelke.getBoundingClientRect().height : 0) + 12;
+  // rullePosition(), ikke window.scrollY: paa en telefon er det <body>, der
+  // ruller, og vinduet staar paa 0 uanset hvor langt nede man er.
+  const y = Math.max(0, maal.getBoundingClientRect().top + rullePosition() - luft);
+  rulTil(y, true);
 }
 
 function bibliotekKort(raekke) {
@@ -1729,8 +1852,13 @@ function titelSide() {
   const p = t.data.progress;
 
   return el('div', {}, [
-    el('button', { class: 'btn ghost lille', text: '← Library',
-      onclick: () => { state.view = 'library'; tegnSide(); } }),
+    el('div', { class: 'titelrad' }, [
+      el('button', { class: 'btn ghost lille', text: '← Library',
+        onclick: () => { state.view = 'library'; tegnSide(); } }),
+      // Kun paa noget, man FAKTISK har. Ellers ville knappen love at fjerne
+      // en titel, der ikke er der.
+      t.data.tracking ? fjernFraBiblioteket(t.data) : null,
+    ]),
     el('div', { class: 'titelhoved' }, [
       titel.posterPath
         ? el('img', { class: 'plakat', src: `/api/poster/w342${titel.posterPath}`, alt: '' })
@@ -1941,6 +2069,77 @@ async function genindlaesTitel(titleId) {
   state.titel.beslaegtede = beslaegtede;
   await Promise.all([hentUpNext(), hentBibliotek()]);
   tegnSide();
+}
+
+/*
+ * Fjern en titel fra biblioteket igen.
+ *
+ * Skal virke, uanset om titlen bare er tilfoejet eller ogsaa er markeret
+ * set (Andreas, 2026-08-29). Og det er netop DÉR, spoergsmaalet bliver
+ * svaert: historikken er ikke det samme som biblioteket.
+ *
+ * Derfor tre svar, ikke to:
+ *
+ *   - Fjern, og BEHOLD historikken. Standarden. Titlen forsvinder fra
+ *     biblioteket, men det, man har set, taeller stadig i statistikken. At
+ *     rydde op i sit bibliotek maa ikke stille og roligt slette aar af
+ *     historik.
+ *   - Fjern ALT, ogsaa historikken. Findes, fordi den anden vej ikke kan
+ *     naas bagefter: er titlen foerst vaek fra biblioteket, er der ingen
+ *     side at gaa ind paa for at rydde historikken.
+ *   - Fortryd.
+ *
+ * Bedoemmelse og note bliver staaende. De hoerer ikke til "biblioteket", og
+ * tilfoejer man titlen igen, er de der stadig.
+ */
+function fjernFraBiblioteket(d) {
+  const navn = d.title.name;
+  // Hvor meget historik er der? En serie taeller afsnit, en film gange.
+  const antal = d.progress ? d.progress.sete : (d.watched || []).length;
+
+  return el('button', {
+    class: 'btn ghost lille fjernknap', text: 'Remove from library',
+    onclick: async (e) => {
+      const valg = antal
+        ? await spoerg('Remove from library?',
+            `${navn} will be removed from your library. You have ${antal} `
+            + `${antal === 1 ? 'viewing' : 'viewings'} recorded — that history counts `
+            + 'towards your statistics. Once the title is gone you cannot get back '
+            + 'to this page to clear it.',
+            [
+              { id: 'behold', text: 'Remove, keep history', primary: true },
+              { id: 'alt', text: 'Remove and delete history' },
+              { id: 'fortryd', text: 'Cancel' },
+            ])
+        : await spoerg('Remove from library?',
+            `${navn} will be removed from your library. You can add it again at any time.`,
+            [
+              { id: 'behold', text: 'Remove', primary: true },
+              { id: 'fortryd', text: 'Cancel' },
+            ]);
+      if (valg === 'fortryd') return;
+
+      e.target.disabled = true;
+      try {
+        /*
+         * Historikken FOERST. Gaar noget galt undervejs, staar titlen stadig
+         * i biblioteket - og saa kan man proeve igen. Den omvendte orden
+         * ville efterlade en historik uden en side at rydde den fra.
+         */
+        if (valg === 'alt') {
+          await api(`/watches/title/${encodeURIComponent(d.title.id)}`, { method: 'DELETE' });
+        }
+        await api(`/items/${encodeURIComponent(d.tracking.id)}`, { method: 'DELETE' });
+        toast(`${navn} removed.`);
+        state.view = 'library';
+        await Promise.all([hentUpNext(), hentBibliotek()]);
+        tegnSide();
+      } catch (err) {
+        e.target.disabled = false;
+        toast(err.message, 'fejl');
+      }
+    },
+  });
 }
 
 /* ------------------------------------------------------------- dialog */
