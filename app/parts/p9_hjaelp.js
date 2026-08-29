@@ -26,29 +26,38 @@ const HJAELP = {
   },
   trakt: {
     titel: 'Connecting Trakt',
-    url: 'https://trakt.tv/oauth/applications/new',
+    url: 'https://trakt.tv/settings/data',
     trin: [
-      'Sign in on trakt.tv and open Settings → Your API Apps → New Application.',
-      'Give it any name, for example "spolen".',
+      'NOTE: since 2026 Trakt requires a paid VIP membership to create an API '
+        + 'application. Without VIP you cannot connect Trakt directly to spolen.',
+      'Without VIP, try an export instead: trakt.tv → Settings → Data. If you can '
+        + 'download your history there, spolen imports the file — same result, no membership.',
+      'With VIP: Settings → Your API Apps → New Application. Any name will do.',
       'Under Redirect uri write: urn:ietf:wg:oauth:2.0:oob',
       'Save, and copy the Client ID and Client Secret into the two fields here.',
       'Then press Connect Trakt — you get a code to type on trakt.tv.',
     ],
-    note: 'Sequel syncs to Trakt, so this is the way to bring a Sequel history across '
-      + 'without an export file. The client id and secret belong to the installation; '
-      + 'the login afterwards is personal, so everyone in the house connects their own account.',
+    note: 'Sequel syncs to Trakt, so Trakt was the obvious way out of Sequel. If VIP '
+      + 'blocks you, the file import above takes anything: a Trakt export, Letterboxd, '
+      + 'IMDb, TV Time or Netflix — as .csv or a whole GDPR .zip. Sequel also has '
+      + 'Shortcuts actions that can write a file.',
   },
   plex: {
     titel: 'Connecting Plex',
     url: 'https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/',
     trin: [
-      'The address is your own Plex server on your network, for example http://192.168.1.50:32400',
-      'The token is not a password. Open Plex in a browser, play something, then open the browser’s developer tools → Network and look for X-Plex-Token in any request.',
-      'Plex’s own guide (linked below) shows a second way through the XML view.',
-      'Press Test connection before saving — a wrong address just goes quiet otherwise.',
+      'You do not need a server address. spolen asks plex.tv which servers your '
+        + 'account can reach — including ones other people have shared with you.',
+      'You only need an X-Plex-Token. It is not a password: open Plex in a browser, '
+        + 'play something, then open developer tools → Network and look for X-Plex-Token '
+        + 'in any request. Plex’s own guide below shows a second way.',
+      'Paste it, press Find my servers, and pick one from the list.',
+      'If the server has several accounts, choose whose history to read — otherwise '
+        + 'spolen imports everyone’s.',
     ],
-    note: 'Plex is the only service that can tell spolen what you actually watched. '
-      + 'Everything else is either an import or marked by hand.',
+    note: 'A server shared with you may or may not let spolen read watch history; that '
+      + 'is the owner’s setting. Plex is still the only service that can report what you '
+      + 'actually watched — everything else is an import or marked by hand.',
   },
   noegler: {
     titel: 'Access keys and Claude',

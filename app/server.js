@@ -806,13 +806,22 @@ function apiFejl(res, status, kode, besked, ekstra) {
 
 const MAX_BODY = 2 * 1024 * 1024;
 
+/*
+ * Importen maa fylde mere. En Trakt-dataeksport er ~4,5 MB JSON fordelt paa
+ * 77 filer, og JSON-indpakningen goer den til godt 5 MB paa traaden. Den
+ * generelle 2 MB-graense er rigtig for alt andet og skal blive staaende -
+ * den her gaelder KUN de to importruter (Andreas' eksport, 2026-08-29).
+ */
+const MAX_IMPORT_BODY = 48 * 1024 * 1024;
+
 /**
  * @param {boolean} tilgivende  Saettes KUN naar forespoergslen er godkendt med
  *   en adgangsnoegle. Kravet om application/json er en CSRF-barriere, og CSRF
  *   forudsaetter en ambient legitimation (cookien). En Bearer-noegle sendes
  *   aktivt af klienten, saa der er intet at forfalske.
  */
-function readJsonBody(req, tilgivende, tilladArray) {
+function readJsonBody(req, tilgivende, tilladArray, maxBody) {
+  const graense = maxBody || MAX_BODY;
   return new Promise((resolve, reject) => {
     const type = String(req.headers['content-type'] || '');
     const erJson = type.includes('application/json');
@@ -824,9 +833,18 @@ function readJsonBody(req, tilgivende, tilladArray) {
     let size = 0;
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > MAX_BODY) {
-        reject(Object.assign(new Error('the request is too large'), { status: 413 }));
-        req.destroy();
+      if (size > graense) {
+        /*
+         * Afvis FOERST, afbryd bagefter.
+         *
+         * Foerste udgave kaldte req.destroy() med det samme, og saa naaede
+         * svaret aldrig frem: klienten saa kun "100 Continue" og hang. En
+         * for stor forespoergsel skal sige det - ikke gaa i staa.
+         */
+        reject(Object.assign(
+          new Error(`the request is too large (over ${Math.round(graense / 1048576)} MB)`),
+          { status: 413, kode: 'too_large' }));
+        setTimeout(() => req.destroy(), 50);
         return;
       }
       chunks.push(chunk);
@@ -2499,6 +2517,50 @@ async function plexTik() {
 
 /* ------------------------------------------------------------- import */
 
+/**
+ * Laeser MANGE filer som ÉN import.
+ *
+ * En Trakt-eksport er ikke én fil: historikken er delt over
+ * watched-history-1..17.json, og watchlist og bedoemmelser ligger for sig.
+ * At vaelge "den stoerste fil" ville importere en syttendedel af historikken
+ * og se vellykket ud (Andreas' eksport, 2026-08-29).
+ *
+ * Filer, der ikke kan genkendes, springes over MED NAVN i svaret - en
+ * GDPR-eksport indeholder ogsaa profiler, indstillinger og kommentarer, og
+ * brugeren skal kunne se, at de blev sprunget over med vilje.
+ */
+function laesFiler(filer, valg) {
+  const raekker = [];
+  const sprunget = [];
+  const brugte = [];
+  const ignorerede = [];
+  for (const f of filer || []) {
+    const navn = String(f.navn || 'fil');
+    const r = importer.laesFil(String(f.tekst || ''), valg);
+    if (r.fejl || !r.raekker.length) { ignorerede.push(navn); continue; }
+    brugte.push({ navn, format: r.formatNavn, raekker: r.raekker.length });
+    raekker.push(...r.raekker);
+    for (const sp of r.sprunget) sprunget.push(Object.assign({ fil: navn }, sp));
+  }
+  /*
+   * Dubletter paa tvaers af filer er normalt i en Trakt-eksport:
+   * watched-movies.json gentager det, watched-history staar for. Uden
+   * frafiltrering her ville de blive sendt til importmotoren to gange -
+   * dubletnoeglen fanger dem, men det er spild af tid og af TMDB-kald.
+   */
+  const set = new Set();
+  const unikke = [];
+  for (const r of raekker) {
+    const n = [r.type, r.ids.tmdb || r.ids.imdb || r.title, r.season, r.number,
+      r.watchedAt ? Math.floor(r.watchedAt / 86400) : ''].join('|');
+    if (set.has(n)) continue;
+    set.add(n);
+    unikke.push(r);
+  }
+  return { raekker: unikke, sprunget, brugte, ignorerede, dubletter: raekker.length - unikke.length };
+}
+
+
 /*
  * Importjobbet (F3).
  *
@@ -2704,6 +2766,27 @@ async function koerImportRaekker(userId, raekker, formatNavn, sprunget) {
           });
         }
 
+        /*
+         * BEDOEMMELSEN gemmes FOER vagterne nedenfor.
+         *
+         * En bedoemmelse er gyldig, uanset om raekken ogsaa er en visning:
+         * Trakts ratings-filer har hverken watched_at eller afsnit, saa de
+         * ramte baade `show`-vagten og erVisning-vagten og blev sprunget
+         * over. Maalt paa Andreas' eksport: 64 bedoemmelser i filen, 0 i
+         * basen (2026-08-29).
+         */
+        if (r.rating) {
+          let ratingAfsnit = null;
+          if (r.season !== null && r.number !== null) {
+            const kandidat = afsnitId(id, r.season, r.number);
+            if (hentEtAfsnit(kandidat)) ratingAfsnit = kandidat;
+          }
+          gemItem(userId, {
+            kind: 'rating', titleId: id, episodeId: ratingAfsnit,
+            score: r.rating, ratedAt: r.watchedAt || now(),
+          });
+        }
+
         // En 'show'-raekke er en FOELGNING, ikke en visning - fx en
         // watchlist-eksport. Den maa ikke blive til et set afsnit.
         if (r.type === 'show') { importJob.faerdig++; continue; }
@@ -2755,6 +2838,16 @@ async function koerImportRaekker(userId, raekker, formatNavn, sprunget) {
          * statistikken kan holde den ude af aarsopgoerelsen frem for at
          * lade som om, den blev set i dag.
          */
+        /*
+         * Er raekken IKKE en visning, stopper vi her.
+         *
+         * En collection-post ("jeg har filen") maa aldrig blive til en
+         * visning. Uden vagten faldt den igennem til udsendelsesdagen
+         * nedenfor og blev registreret som set - 4.250 afsnit i Andreas'
+         * eksport (2026-08-29). Titlen er fulgt; det er alt, den siger.
+         */
+        if (r.erVisning === false) { importJob.faerdig++; continue; }
+
         let naar = r.watchedAt;
         let kilde = 'import';
         if (!naar && episodeId) {
@@ -2765,12 +2858,6 @@ async function koerImportRaekker(userId, raekker, formatNavn, sprunget) {
         pulje.push({ titleId: id, episodeId, watchedAt: naar, source: kilde });
         if (pulje.length >= 100) skyl();
 
-        if (r.rating) {
-          gemItem(userId, {
-            kind: 'rating', titleId: id, episodeId,
-            score: r.rating, ratedAt: r.watchedAt || now(),
-          });
-        }
       } catch (err) {
         importJob.fejl.push(`${r.title}: ${err.message}`);
         if (err.kode === 'tmdb_bad_key' || err.kode === 'tmdb_rate_limited') {
@@ -4582,25 +4669,48 @@ const ROUTES = {
   'POST /api/import/analyse': async (req, res) => {
     const user = requireUser(req, res);
     if (!user) return;
-    const body = await readJsonBody(req);
-    const tekst = typeof body.text === 'string' ? body.text : '';
-    if (!tekst.trim()) { apiFejl(res, 400, 'bad_request', 'The file is empty.'); return; }
-    const laest = importer.laesFil(tekst);
+    const body = await readJsonBody(req, false, false, MAX_IMPORT_BODY);
+    const filer = Array.isArray(body.files) && body.files.length
+      ? body.files
+      : [{ navn: 'file', tekst: typeof body.text === 'string' ? body.text : '' }];
+    if (!filer.some((f) => String(f.tekst || '').trim())) {
+      apiFejl(res, 400, 'bad_request', 'The file is empty.');
+      return;
+    }
+    const laest = filer.length === 1
+      ? Object.assign(importer.laesFil(filer[0].tekst), { brugte: [], ignorerede: [] })
+      : laesFiler(filer);
     if (laest.fejl) { apiFejl(res, 400, 'bad_format', laest.fejl); return; }
+    if (!laest.raekker.length) {
+      apiFejl(res, 400, 'bad_format',
+        `Nothing readable in ${filer.length} file(s). Skipped: `
+        + (laest.ignorerede || []).slice(0, 6).join(', '));
+      return;
+    }
     const tael = (t) => laest.raekker.filter((r) => r.type === t).length;
     sendJson(res, 200, {
       format: laest.format,
       formatName: laest.formatNavn,
       // Hvilken vej datoerne blev laest, og om filen selv beviste det.
       // Er den ikke sikker, skal fladen SPOERGE frem for at gaette videre.
-      dateOrder: laest.dateOrder,
-      dateOrderCertain: laest.dateOrderSikker,
+      dateOrder: laest.dateOrder || 'iso',
+      dateOrderCertain: laest.dateOrderSikker !== false,
       rows: laest.raekker.length,
+      // Hvilke filer der blev brugt, og hvilke der blev sprunget over. En
+      // GDPR-eksport har snesevis af filer, og brugeren skal kunne se, at
+      // profiler og indstillinger blev valgt fra med vilje.
+      used: laest.brugte || [],
+      ignored: (laest.ignorerede || []).slice(0, 40),
+      crossFileDuplicates: laest.dubletter || 0,
       skipped: laest.sprunget.length,
       movies: tael('movie'),
       episodes: tael('episode'),
       shows: tael('show'),
       withDates: laest.raekker.filter((r) => r.watchedAt).length,
+      // Hvor mange der faktisk bliver til VISNINGER. Forskellen mellem
+      // rows og watches er collection-poster: ting man ejer, ikke har set.
+      watches: laest.raekker.filter((r) => r.erVisning !== false && r.watchedAt).length,
+      followsOnly: laest.raekker.filter((r) => r.erVisning === false || !r.watchedAt).length,
       // Fem raekker er nok til at se, om titler og datoer er landet rigtigt.
       sample: laest.raekker.slice(0, 5),
     });
@@ -4609,8 +4719,20 @@ const ROUTES = {
   'POST /api/import/start': async (req, res) => {
     const user = requireUser(req, res);
     if (!user) return;
-    const body = await readJsonBody(req);
-    const tekst = typeof body.text === 'string' ? body.text : '';
+    const body = await readJsonBody(req, false, false, MAX_IMPORT_BODY);
+    if (Array.isArray(body.files) && body.files.length > 1) {
+      const l = laesFiler(body.files, { dateOrder: (body.options || {}).dateOrder });
+      if (!l.raekker.length) {
+        apiFejl(res, 400, 'bad_format', 'Nothing readable in those files.');
+        return;
+      }
+      sendJson(res, 200, await koerImportRaekker(user.id, l.raekker,
+        `${l.brugte.length} files`, l.sprunget));
+      return;
+    }
+    const tekst = Array.isArray(body.files) && body.files.length
+      ? String(body.files[0].tekst || '')
+      : (typeof body.text === 'string' ? body.text : '');
     if (!tekst.trim()) { apiFejl(res, 400, 'bad_request', 'The file is empty.'); return; }
     sendJson(res, 200, await koerImport(user.id, tekst, body.options));
   },

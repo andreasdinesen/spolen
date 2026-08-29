@@ -2522,3 +2522,7 @@ button.version-linje.gammel {
   line-height: 1.35;
 }
 button.version-linje.gammel:hover { text-decoration: underline; }
+
+/* Den manuelle Plex-vej er foldet sammen: den er undtagelsen, ikke reglen. */
+.manuel-plex { margin-top: 14px; border-top: 1px solid var(--border-soft); padding-top: 8px; }
+.manuel-plex summary { color: var(--muted); font-size: .88rem; }

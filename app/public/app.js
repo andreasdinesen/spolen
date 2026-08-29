@@ -12,7 +12,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 5;
+const APP_VERSION = 6;
 
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
@@ -40,7 +40,7 @@ const state = {
   tjenester: { hentet: false, fejl: '', region: 'DK', providers: [], mine: [] },
   stats: { hentet: false, fejl: '', data: null },
   trakt: { kode: null, url: '', fejl: '', besked: '' },
-  plex: { url: '', token: '', accountId: '', svar: null, fejl: '', webhook: null },
+  plex: { url: '', token: '', accountId: '', svar: null, fejl: '', webhook: null, servere: null, manuelToken: '' },
   noegler: { liste: [], ny: null },
   hjaelp: null,
   push: { abon: [], noegle: '', fejl: '' },
@@ -1822,7 +1822,25 @@ function analyseKort(a) {
   return el('div', { class: 'card' }, [
     el('h3', { text: a.formatName }),
     state.import.zipNavn
-      ? el('p', { class: 'dim lille', text: `From ${state.import.zipNavn} inside the zip.` })
+      ? el('p', { class: 'dim lille', text: `From ${state.import.zipNavn}.` })
+      : null,
+    (a.used && a.used.length > 1)
+      ? el('details', {}, [
+          el('summary', { text: `${a.used.length} files used`
+            + (a.ignored && a.ignored.length ? `, ${a.ignored.length} skipped` : '') }),
+          el('div', { class: 'liste' }, a.used.slice(0, 30).map((u) => el('div', { class: 'item-row' }, [
+            el('span', { class: 'lille', text: u.navn }),
+            el('span', { class: 'dim lille', text: `${u.raekker} rows · ${u.format}` }),
+          ]))),
+          (a.ignored && a.ignored.length)
+            ? el('p', { class: 'dim lille', text:
+                'Skipped (not a history format): ' + a.ignored.slice(0, 12).join(', ') })
+            : null,
+          a.crossFileDuplicates
+            ? el('p', { class: 'dim lille', text:
+                `${a.crossFileDuplicates} entries appeared in more than one file and were counted once.` })
+            : null,
+        ])
       : null,
     el('p', { class: 'dim', text:
       `${a.rows} rows — ${a.movies} films, ${a.episodes} episodes, ${a.shows} shows. `
@@ -1894,7 +1912,8 @@ function importFremdrift(s) {
 }
 
 function tomImport() {
-  return { tekst: '', analyse: null, status: null, fejl: '', dateOrder: null, zipNavn: null };
+  return { tekst: '', filer: null, analyse: null, status: null, fejl: '',
+    dateOrder: null, zipNavn: null };
 }
 
 async function laesImportFil(fil) {
@@ -1907,36 +1926,40 @@ async function laesImportFil(fil) {
     let tekst;
     if (/\.zip$/i.test(fil.name) || fil.type === 'application/zip') {
       /*
-       * En GDPR-eksport er et zip-arkiv med snesevis af filer. Vi pakker ud
-       * i BROWSEREN og sender kun den CSV, der viser sig at vaere en
-       * historik - resten (profiler, enheder, betalinger) hoerer ikke
-       * hjemme paa serveren overhovedet.
+       * En eksport er ikke ÉN fil.
+       *
+       * Trakts historik er delt over watched-history-1..17.json, og
+       * watchlist og bedoemmelser ligger for sig. Foerste udgave valgte
+       * "den stoerste genkendte fil" - det ville have importeret en
+       * syttendedel af historikken og set vellykket ud.
+       *
+       * Zip'en pakkes ud i BROWSEREN, og alle laesbare filer sendes til
+       * serveren, som afgoer hvilke der er brugbare. Resten (profiler,
+       * indstillinger, kommentarer) genkendes ikke og springes over.
        */
-      const filer = await zipFindCsv(await fil.arrayBuffer());
+      const filer = await zipFindFiler(await fil.arrayBuffer());
       if (!filer.length) {
-        state.import.fejl = 'No .csv files inside that zip.';
+        state.import.fejl = 'No .csv or .json files inside that zip.';
         tegnSide();
         return;
       }
-      // Lad formatgenkendelsen afgoere hvilken. Den stoerste genkendte fil
-      // vinder: en eksport har tit baade "watched" og en lille "watchlist".
-      let bedst = null;
-      for (const f of filer) {
-        try {
-          const a = await api('/import/analyse', { method: 'POST', body: { text: f.tekst } });
-          if (a.rows && (!bedst || a.rows > bedst.analyse.rows)) bedst = { fil: f, analyse: a };
-        } catch { /* ikke et format vi kender - proev naeste */ }
-      }
-      if (!bedst) {
-        state.import.fejl = `None of the ${filer.length} csv files in that zip is a format `
-          + `spolen knows: ${filer.map((f) => f.navn.split('/').pop()).slice(0, 5).join(', ')}`;
+      const samlet = filer.reduce((n, f) => n + f.tekst.length, 0);
+      // Under serverens 48 MB med god margen: JSON-indpakningen goer
+      // teksten ~15 % stoerre paa traaden.
+      if (samlet > 30 * 1024 * 1024) {
+        state.import.fejl = 'That export unpacks to more than 30 MB — too big to import in one go.';
         tegnSide();
         return;
       }
-      state.import.tekst = bedst.fil.tekst;
-      state.import.analyse = bedst.analyse;
-      state.import.dateOrder = bedst.analyse.dateOrder;
-      state.import.zipNavn = bedst.fil.navn;
+      try {
+        const a = await api('/import/analyse', { method: 'POST', body: { files: filer } });
+        state.import.filer = filer;
+        state.import.analyse = a;
+        state.import.dateOrder = a.dateOrder;
+        state.import.zipNavn = `${fil.name} (${filer.length} files inside)`;
+      } catch (err) {
+        state.import.fejl = err.message;
+      }
       tegnSide();
       return;
     }
@@ -1960,12 +1983,14 @@ async function startImport(knap) {
   knap.disabled = true;
   try {
     state.import.status = await api('/import/start', { method: 'POST', body: {
-      text: state.import.tekst,
+      text: state.import.tekst || undefined,
+      files: state.import.filer || undefined,
       options: { dateOrder: state.import.dateOrder },
     } });
     // Teksten slippes med det samme - en historik paa mange megabyte skal
     // ikke ligge i browserens hukommelse, mens jobbet koerer paa serveren.
     state.import.tekst = '';
+    state.import.filer = null;
     state.import.analyse = null;
     tegnSide();
     poll();
@@ -2069,14 +2094,16 @@ async function zipUdpak(buf, post) {
  * brugbar: at gaette paa filnavne ville betyde, at eksporten kun virker,
  * saa laenge tjenesten ikke omdoeber noget.
  */
-async function zipFindCsv(buf) {
+async function zipFindFiler(buf) {
   const poster = zipPoster(buf).filter((p) =>
-    /\.csv$/i.test(p.navn) && !p.navn.endsWith('/') && p.komp > 0
+    /\.(csv|json)$/i.test(p.navn) && !p.navn.endsWith('/') && p.komp > 0
     // __MACOSX er de ressourcegafler, macOS lægger i et zip-arkiv. De ligner
     // rigtige filer og indeholder ingenting.
     && !p.navn.startsWith('__MACOSX/'));
   const ud = [];
-  for (const p of poster.slice(0, 40)) {
+  // 120: en Trakt-eksport har ~75 filer, en GDPR-eksport kan have flere.
+  // Loftet er der, saa et fjendtligt arkiv ikke kan pakke browseren ned.
+  for (const p of poster.slice(0, 120)) {
     try {
       ud.push({ navn: p.navn, tekst: await zipUdpak(buf, p) });
     } catch { /* en ulaeselig post springes over - resten er stadig brugbar */ }
@@ -2111,7 +2138,8 @@ function traktAppAfsnit() {
   return el('div', {}, [
     el('p', { class: 'dim lille', text:
       'Register an app on trakt.tv once, for the whole household. '
-      + 'Press ? above for the exact steps — the redirect uri has to be a specific value.' }),
+      + 'This needs a Trakt VIP membership — Trakt gated API applications behind it. '
+      + 'Press ? above for the steps and for what to do without VIP.' }),
     el('div', { class: 'formgrid' }, [
       el('label', { text: 'Client ID' }), idFelt,
       el('label', { text: 'Client Secret' }), hemFelt,
@@ -2157,8 +2185,9 @@ function traktAfsnit() {
     afsnitshoved('Trakt', 'trakt', 'h3'),
     hjaelpePanel('trakt'),
     el('p', { class: 'dim lille', text:
-      'Sequel syncs to Trakt, so connecting Trakt is the way to bring your Sequel '
-      + 'history across without an export file.' }),
+      'Sequel syncs to Trakt. Note that Trakt now requires a paid VIP membership to '
+      + 'create an API application — without it, use an export file instead. '
+      + 'Press ? for the details.' }),
 
     t.kode ? traktKode(t) : null,
 
@@ -2273,64 +2302,170 @@ function plexAfsnit() {
   const p = state.plex;
   const forbundet = state.config && state.config.plexLinked;
 
-  const urlFelt = el('input', {
-    type: 'text', placeholder: 'http://192.168.1.50:32400', spellcheck: 'false',
-    value: p.url || '', style: 'font-size:16px',
-    oninput: (e) => { state.plex.url = e.target.value; },
-  });
   const tokenFelt = el('input', {
-    type: 'password', autocomplete: 'off', spellcheck: 'false',
+    type: 'password', autocomplete: 'off', spellcheck: 'false', style: 'font-size:16px',
     placeholder: forbundet ? 'A token is saved — paste a new one to replace it' : 'X-Plex-Token',
-    style: 'font-size:16px',
     oninput: (e) => { state.plex.token = e.target.value; },
   });
 
   return el('div', {}, [
-    afsnitshoved('Plex', 'plex', 'h3'),
-    hjaelpePanel('plex'),
     el('p', { class: 'dim lille', text:
       'Plex is the only service that can tell spolen what you actually watched. '
       + 'Everything it finds is matched on Plex’s own ids, so it is exact — not guesswork.' }),
 
+    /*
+     * ÉT felt: kontoens token. Ikke en serveradresse.
+     *
+     * Bruger man app.plex.tv til at se film, der er DELT med én, findes der
+     * ingen adresse at skrive - serveren staar hos en anden, og dens adresse
+     * skifter (Andreas, 2026-08-29). plex.tv kender baade adressen og det
+     * token, netop den server vil acceptere, saa vi spoerger den i stedet.
+     */
     el('div', { class: 'formgrid' }, [
-      el('label', { text: 'Server address' }), urlFelt,
-      el('label', { text: 'Token' }), tokenFelt,
+      el('label', { text: 'Plex account token' }), tokenFelt,
+      el('button', { class: 'btn primary', text: 'Find my servers',
+        onclick: (e) => findServere(e.target) }),
     ]),
 
-    p.svar ? plexSvar(p.svar) : null,
     p.fejl ? el('p', { class: 'noeglestatus mangler', text: p.fejl }) : null,
+    p.servere ? serverListe(p.servere) : null,
 
-    el('div', { class: 'knaprad' }, [
-      el('button', { class: 'btn ghost', text: 'Test connection',
-        onclick: (e) => proevPlex(e.target, false) }),
-      el('button', { class: 'btn primary', text: 'Save and connect',
-        onclick: (e) => proevPlex(e.target, true) }),
-      forbundet
-        ? el('button', { class: 'btn ghost', text: 'Disconnect', onclick: async () => {
-            await api('/plex', { method: 'DELETE' });
-            state.config.plexLinked = false;
-            state.plex = { url: '', token: '', svar: null, fejl: '' };
-            tegnSide();
-          } })
-        : null,
+    /*
+     * Den MANUELLE vej beholdes.
+     *
+     * Opdagelsen via plex.tv er den rigtige for de fleste - og den eneste,
+     * der virker, naar serveren er delt med én. Men koerer man selv en
+     * server paa samme net, er en adresse hurtigere og virker uden at
+     * spoerge plex.tv om noget (Andreas, 2026-08-29).
+     */
+    el('details', { class: 'manuel-plex' }, [
+      el('summary', { text: 'I run my own server and know its address' }),
+      manuelPlexAfsnit(),
     ]),
 
     forbundet
       ? el('div', {}, [
           el('p', { class: 'noeglestatus har', text:
             'Connected. spolen checks for new plays every 10 minutes.' }),
+          p.svar && p.svar.accounts && p.svar.accounts.length > 1 ? kontoValg(p.svar.accounts) : null,
           plexWebhookAfsnit(),
           el('div', { class: 'knaprad' }, [
             el('button', { class: 'btn primary', text: 'Import everything from Plex',
               onclick: (e) => importerFraPlex(e.target, true) }),
             el('button', { class: 'btn ghost', text: 'Fetch new plays now',
               onclick: (e) => importerFraPlex(e.target, false) }),
+            el('button', { class: 'btn ghost', text: 'Disconnect', onclick: async () => {
+              await api('/plex', { method: 'DELETE' });
+              state.config.plexLinked = false;
+              state.plex = { url: '', token: '', accountId: '', svar: null, fejl: '',
+                webhook: null, servere: null };
+              tegnSide();
+            } }),
           ]),
         ])
       : null,
   ]);
 }
 
+/*
+ * Serverne, som de FAKTISK kunne naas - ikke som plex.tv siger de findes.
+ *
+ * En hjemmeserver kan vaere slukket, og en lokal adresse virker kun fra
+ * samme net. At vise en uopnaaelig server som et valg ville betyde, at
+ * fejlen foerst dukker op ved den foerste hentning.
+ */
+function serverListe(servere) {
+  if (!servere.length) {
+    return el('p', { class: 'dim', text:
+      'That token works, but the account has access to no Plex servers.' });
+  }
+  return el('div', {}, [
+    el('h4', { text: 'Servers this account can reach' }),
+    el('div', { class: 'liste' }, servere.map((srv) => el('div', { class: 'item-row' }, [
+      el('div', { class: 'omni-row-main' }, [
+        el('div', { class: 'omni-row-title', text: srv.navn }),
+        el('div', { class: 'omni-row-sub', text: [
+          srv.ejer ? 'your own server' : `shared${srv.ejerNavn ? ` by ${srv.ejerNavn}` : ''}`,
+          srv.naaet ? `reachable (${srv.vej})` : 'could not be reached',
+          srv.version ? `Plex ${srv.version}` : null,
+        ].filter(Boolean).join(' · ') }),
+      ]),
+      srv.naaet
+        ? el('button', { class: 'btn primary lille', text: 'Use this one',
+            onclick: (e) => vaelgServer(srv, e.target) })
+        : el('span', { class: 'dim lille', text: 'offline?' }),
+    ]))),
+    el('p', { class: 'dim lille', text:
+      'A server shared with you may or may not let spolen read your watch history — '
+      + 'that is the owner’s setting, and you find out when you import.' }),
+  ]);
+}
+
+/*
+ * Hvis historik? Kun relevant naar serveren har flere konti.
+ *
+ * Uden valget henter spolen HELE serverens historik, ogsaa de andres - og
+ * det er ikke stoej, men andres seervaner i din historik.
+ */
+function kontoValg(konti) {
+  const vaelg = el('select', { style: 'font-size:16px' }, [
+    el('option', { value: '', text: 'Everyone on the server' }),
+    ...konti.map((a) => el('option', { value: a.id, text: a.navn })),
+  ]);
+  vaelg.value = state.plex.accountId || '';
+  return el('div', { class: 'formgrid' }, [
+    el('label', { text: 'Whose history' }), vaelg,
+    el('button', { class: 'btn ghost', text: 'Save', onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        await api('/plex/test', { method: 'POST', body: { save: true, accountId: vaelg.value } });
+        state.plex.accountId = vaelg.value;
+        toast('Saved.');
+      } catch (err) { toast(err.message, 'fejl'); }
+      e.target.disabled = false;
+    } }),
+  ]);
+}
+
+async function findServere(knap) {
+  knap.disabled = true;
+  const gammel = knap.textContent;
+  knap.textContent = 'Asking plex.tv…';
+  state.plex.fejl = '';
+  try {
+    const r = await api('/plex/discover', { method: 'POST', body: {
+      token: state.plex.token, save: true,
+    } });
+    state.plex.servere = r.servers || [];
+    state.plex.token = '';       // slippes, saa snart den er gemt server-side
+  } catch (err) {
+    state.plex.servere = null;
+    state.plex.fejl = err.message;
+  }
+  knap.disabled = false;
+  knap.textContent = gammel;
+  tegnSide();
+}
+
+async function vaelgServer(srv, knap) {
+  knap.disabled = true;
+  knap.textContent = 'Connecting…';
+  try {
+    const r = await api('/plex/select', { method: 'POST', body: { serverId: srv.id } });
+    state.config.plexLinked = true;
+    state.plex.svar = { server: srv.navn, accounts: r.accounts || [] };
+    state.plex.servere = null;
+    await hentPlexWebhook();
+    tegnSide();
+    toast(`Connected to ${srv.navn}.`);
+  } catch (err) {
+    knap.disabled = false;
+    knap.textContent = 'Use this one';
+    toast(err.message, 'fejl');
+  }
+}
+
+/* Beholdt: den gamle manuelle proeve bruger den stadig. */
 function plexSvar(s) {
   return el('div', { class: 'card' }, [
     el('p', { text: `Reached ${s.server || 'the server'}${s.version ? ` (Plex ${s.version})` : ''}.` }),
@@ -2462,6 +2597,73 @@ function plexWebhookAfsnit() {
 async function hentPlexWebhook() {
   try { state.plex.webhook = (await api('/plex/webhook')).path; }
   catch { state.plex.webhook = null; }
+}
+
+
+/* --------------------------------------------------- plex, manuel vej */
+
+/*
+ * Adresse + token, skrevet i haanden.
+ *
+ * For dem, der selv koerer en Plex-server og kender dens adresse. Vejen
+ * gaar UDEN OM plex.tv, saa den virker ogsaa paa et net uden internet -
+ * og den er hurtigere, naar man ved hvad man laver.
+ */
+function manuelPlexAfsnit() {
+  const p = state.plex;
+  const urlFelt = el('input', {
+    type: 'text', placeholder: 'http://192.168.1.50:32400', spellcheck: 'false',
+    value: p.url || '', style: 'font-size:16px',
+    oninput: (e) => { state.plex.url = e.target.value; },
+  });
+  const tokenFelt = el('input', {
+    type: 'password', autocomplete: 'off', spellcheck: 'false', style: 'font-size:16px',
+    placeholder: 'X-Plex-Token for that server',
+    oninput: (e) => { state.plex.manuelToken = e.target.value; },
+  });
+
+  return el('div', {}, [
+    el('p', { class: 'dim lille', text:
+      'Only works if spolen can reach that address — the same network, or a port '
+      + 'that is open to it. A server shared with you will not have one.' }),
+    el('div', { class: 'formgrid' }, [
+      el('label', { text: 'Server address' }), urlFelt,
+      el('label', { text: 'Token' }), tokenFelt,
+    ]),
+    p.svar && p.svar.server ? plexSvar(p.svar) : null,
+    el('div', { class: 'knaprad' }, [
+      el('button', { class: 'btn ghost', text: 'Test connection',
+        onclick: (e) => proevManuel(e.target, false) }),
+      el('button', { class: 'btn primary', text: 'Save and connect',
+        onclick: (e) => proevManuel(e.target, true) }),
+    ]),
+  ]);
+}
+
+async function proevManuel(knap, gem) {
+  knap.disabled = true;
+  const gammel = knap.textContent;
+  knap.textContent = 'Testing…';
+  state.plex.fejl = '';
+  try {
+    const svar = await api('/plex/test', { method: 'POST', body: {
+      url: state.plex.url, token: state.plex.manuelToken, save: !!gem,
+    } });
+    state.plex.svar = svar;
+    if (gem) {
+      state.config.plexLinked = true;
+      // Tokenet slippes fra hukommelsen, saa snart det er gemt server-side.
+      state.plex.manuelToken = '';
+      await hentPlexWebhook();
+      toast('Plex connected.');
+    }
+  } catch (err) {
+    state.plex.svar = null;
+    state.plex.fejl = err.message;
+  }
+  knap.disabled = false;
+  knap.textContent = gammel;
+  tegnSide();
 }
 
 /* ---- p8_stats.js ---- */
@@ -2774,29 +2976,38 @@ const HJAELP = {
   },
   trakt: {
     titel: 'Connecting Trakt',
-    url: 'https://trakt.tv/oauth/applications/new',
+    url: 'https://trakt.tv/settings/data',
     trin: [
-      'Sign in on trakt.tv and open Settings → Your API Apps → New Application.',
-      'Give it any name, for example "spolen".',
+      'NOTE: since 2026 Trakt requires a paid VIP membership to create an API '
+        + 'application. Without VIP you cannot connect Trakt directly to spolen.',
+      'Without VIP, try an export instead: trakt.tv → Settings → Data. If you can '
+        + 'download your history there, spolen imports the file — same result, no membership.',
+      'With VIP: Settings → Your API Apps → New Application. Any name will do.',
       'Under Redirect uri write: urn:ietf:wg:oauth:2.0:oob',
       'Save, and copy the Client ID and Client Secret into the two fields here.',
       'Then press Connect Trakt — you get a code to type on trakt.tv.',
     ],
-    note: 'Sequel syncs to Trakt, so this is the way to bring a Sequel history across '
-      + 'without an export file. The client id and secret belong to the installation; '
-      + 'the login afterwards is personal, so everyone in the house connects their own account.',
+    note: 'Sequel syncs to Trakt, so Trakt was the obvious way out of Sequel. If VIP '
+      + 'blocks you, the file import above takes anything: a Trakt export, Letterboxd, '
+      + 'IMDb, TV Time or Netflix — as .csv or a whole GDPR .zip. Sequel also has '
+      + 'Shortcuts actions that can write a file.',
   },
   plex: {
     titel: 'Connecting Plex',
     url: 'https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/',
     trin: [
-      'The address is your own Plex server on your network, for example http://192.168.1.50:32400',
-      'The token is not a password. Open Plex in a browser, play something, then open the browser’s developer tools → Network and look for X-Plex-Token in any request.',
-      'Plex’s own guide (linked below) shows a second way through the XML view.',
-      'Press Test connection before saving — a wrong address just goes quiet otherwise.',
+      'You do not need a server address. spolen asks plex.tv which servers your '
+        + 'account can reach — including ones other people have shared with you.',
+      'You only need an X-Plex-Token. It is not a password: open Plex in a browser, '
+        + 'play something, then open developer tools → Network and look for X-Plex-Token '
+        + 'in any request. Plex’s own guide below shows a second way.',
+      'Paste it, press Find my servers, and pick one from the list.',
+      'If the server has several accounts, choose whose history to read — otherwise '
+        + 'spolen imports everyone’s.',
     ],
-    note: 'Plex is the only service that can tell spolen what you actually watched. '
-      + 'Everything else is either an import or marked by hand.',
+    note: 'A server shared with you may or may not let spolen read watch history; that '
+      + 'is the owner’s setting. Plex is still the only service that can report what you '
+      + 'actually watched — everything else is an import or marked by hand.',
   },
   noegler: {
     titel: 'Access keys and Claude',

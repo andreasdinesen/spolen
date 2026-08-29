@@ -207,6 +207,131 @@ function tolkNetflixTitel(raa) {
   };
 }
 
+/* --------------------------------------------------------- trakt (json) */
+
+/*
+ * Trakts DATAEKSPORT er JSON, ikke CSV - og den har samme form som deres API.
+ *
+ * Det er heldigt og ikke tilfaeldigt: eksporten er dumpet af de samme
+ * endepunkter. Derfor bor oversaettelsen HER og bruges af baade filimporten
+ * og API-broen (app/trakt.js kalder ind hertil). Der maa ikke findes to
+ * laesninger af den samme form - saa opfoerer de to veje sig forskelligt paa
+ * de svaere poster.
+ *
+ * Eksporten er delt over MANGE filer: watched-history-1..17.json for en
+ * historik paa nogle tusinde poster. De skal laeses SAMLET, ikke som
+ * "den stoerste fil" (Andreas' eksport, 2026-08-29).
+ */
+function traktPost(p) {
+  if (!p || typeof p !== 'object') return null;
+  const tid = (v) => {
+    if (!v) return null;
+    const t = Date.parse(v);
+    return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+  };
+  const ids = (o) => {
+    const i = (o && o.ids) || {};
+    return {
+      imdb: typeof i.imdb === 'string' ? i.imdb : null,
+      // Trakt pakker plex-id'et som et OBJEKT ({guid, slug}), ikke et tal.
+      // Et naivt Number() paa det ville give NaN og forgifte matchningen.
+      tmdb: Number.isInteger(i.tmdb) ? i.tmdb : null,
+      tvdb: Number.isInteger(i.tvdb) ? i.tvdb : null,
+    };
+  };
+
+  /*
+   * ER DET EN VISNING ELLER BARE NOGET, MAN EJER?
+   *
+   * Den vigtigste skelnen i hele eksporten. Trakts collection-filer har
+   * `collected_at` - det betyder "jeg HAR den", ikke "jeg har SET den". I
+   * Andreas' eksport var det 17 filer med ~4.250 afsnit, og uden det her
+   * flag ville de alle blive til visninger dateret paa udsendelsesdagen.
+   * Historikken ville blive fyldt med afsnit, han maaske aldrig har set -
+   * og det ville se ud som en vellykket import.
+   *
+   * `last_watched_at` fra watched-movies/shows ER derimod en visning: den
+   * er samlet pr. titel i stedet for pr. afspilning, men den siger, at
+   * titlen er set.
+   */
+  const naar = tid(p.watched_at) || tid(p.last_watched_at);
+  const erVisning = !!naar;
+
+  if (p.episode && p.show) {
+    return {
+      type: 'episode',
+      title: p.show.title || '',
+      year: Number.isInteger(p.show.year) ? p.show.year : null,
+      ids: ids(p.show),
+      season: Number.isInteger(p.episode.season) ? p.episode.season : null,
+      number: Number.isInteger(p.episode.number) ? p.episode.number : null,
+      watchedAt: naar,
+      erVisning,
+      rating: Number.isInteger(p.rating) ? p.rating : null,
+      kilde: 'trakt',
+    };
+  }
+  if (p.movie) {
+    return {
+      type: 'movie',
+      title: p.movie.title || '',
+      year: Number.isInteger(p.movie.year) ? p.movie.year : null,
+      ids: ids(p.movie),
+      season: null, number: null,
+      watchedAt: naar,
+      erVisning,
+      rating: Number.isInteger(p.rating) ? p.rating : null,
+      kilde: 'trakt',
+    };
+  }
+  /*
+   * En SHOW-post uden afsnit er en foelgning (watchlist, ratings paa serien),
+   * ikke en visning.
+   */
+  if (p.show) {
+    return {
+      type: 'show',
+      title: p.show.title || '',
+      year: Number.isInteger(p.show.year) ? p.show.year : null,
+      ids: ids(p.show),
+      season: null, number: null,
+      watchedAt: naar,
+      erVisning: false,
+      rating: Number.isInteger(p.rating) ? p.rating : null,
+      kilde: 'trakt',
+    };
+  }
+  return null;
+}
+
+/** Genkender en Trakt-JSON-fil paa dens FORM, ikke paa filnavnet. */
+function erTraktJson(data) {
+  if (!Array.isArray(data) || !data.length) return false;
+  return data.slice(0, 5).some((p) => p && typeof p === 'object'
+    && (p.movie || p.show || p.episode));
+}
+
+/**
+ * Laeser ÉN JSON-fil fra en Trakt-eksport.
+ *
+ * `watched_at` mangler i watchlist- og ratings-filer, og det er rigtigt:
+ * de er ikke visninger. Importmotoren laver kun en visning, naar der ER en
+ * dato, saa de bliver til foelgninger og bedoemmelser i stedet.
+ */
+function laesTraktJson(tekst) {
+  let data;
+  try { data = JSON.parse(tekst); } catch { return null; }
+  if (!erTraktJson(data)) return null;
+  const raekker = [];
+  const sprunget = [];
+  data.forEach((p, i) => {
+    const r = traktPost(p);
+    if (r && r.title) raekker.push(r);
+    else sprunget.push({ linje: i + 1, grund: 'no title' });
+  });
+  return { raekker, sprunget };
+}
+
 /* -------------------------------------------------------------- formater */
 
 /*
@@ -347,6 +472,23 @@ function detekter(header) {
  */
 function laesFil(tekst, valg) {
   const o = valg || {};
+
+  // JSON foerst: Trakts dataeksport er JSON, og en JSON-fil vil aldrig
+  // kunne laeses fornuftigt som CSV - den ville blive til én lang raekke.
+  const t = String(tekst || '').trimStart();
+  if (t.startsWith('[') || t.startsWith('{')) {
+    const j = laesTraktJson(tekst);
+    if (j) {
+      return {
+        format: 'trakt-json', formatNavn: 'Trakt (export)',
+        raekker: j.raekker, sprunget: j.sprunget, fejl: null,
+        dateOrder: 'iso', dateOrderGaettet: 'iso', dateOrderSikker: true,
+      };
+    }
+    return { format: null, raekker: [], sprunget: [],
+      fejl: 'That JSON file is not a Trakt export spolen recognises.' };
+  }
+
   const tabel = parseCsv(tekst);
   if (tabel.length < 2) {
     return { format: null, raekker: [], sprunget: [], fejl: 'The file has no rows.' };
@@ -407,4 +549,5 @@ function laesFil(tekst, valg) {
 module.exports = {
   parseCsv, headerKort, felt, tolkDato, tolkAar, tolkTal,
   tolkNetflixTitel, detekter, laesFil, gaetDatoformat, FORMATER,
+  traktPost, erTraktJson, laesTraktJson,
 };
