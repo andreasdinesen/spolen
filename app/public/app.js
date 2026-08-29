@@ -12,7 +12,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 7;
+const APP_VERSION = 8;
 
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
@@ -1001,36 +1001,32 @@ async function hentBibliotek() {
  */
 function settingsSide() {
   const admin = state.user && state.user.isAdmin;
+  /*
+   * Alle hovedpunkter er foldbare og starter LUKKEDE.
+   *
+   * Indholdet bygges foerst, naar afsnittet aabnes - tjenestelisten alene er
+   * 62 raekker med hvert sit logo.
+   */
   return el('div', {}, [
     el('h1', { text: 'Settings' }),
 
-    afsnitshoved('Metadata', 'tmdb'),
-    hjaelpePanel('tmdb'),
-    admin ? tmdbAfsnit() : el('p', { class: 'dim', text:
-      'Only the administrator can change the TMDB key.' }),
+    foldAfsnit('metadata', 'Metadata', 'tmdb', () => (admin
+      ? tmdbAfsnit()
+      : el('p', { class: 'dim', text: 'Only the administrator can change the TMDB key.' }))),
 
-    el('h2', { text: 'Your preferences' }),
-    personligeAfsnit(),
+    foldAfsnit('praef', 'Your preferences', null, personligeAfsnit),
 
-    el('h2', { text: 'Your streaming services' }),
-    tjenesteAfsnit(),
+    foldAfsnit('tjenester', 'Your streaming services', null, tjenesteAfsnit),
 
-    importSide(),
+    foldAfsnit('import', 'Import your history', null, importSide),
 
-    noegleAfsnit(),
+    admin ? foldAfsnit('traktapp', 'Trakt application', 'trakt', traktAppAfsnit) : null,
 
-    admin ? afsnitshoved('Trakt application', 'trakt') : null,
-    admin ? hjaelpePanel('trakt') : null,
-    admin ? traktAppAfsnit() : null,
+    foldAfsnit('notifik', 'Notifications', null, notifikationAfsnit),
 
-    el('h2', { text: 'Notifications' }),
-    notifikationAfsnit(),
+    foldAfsnit('noegler', 'Access keys', 'noegler', noegleAfsnit),
 
-    afsnitshoved('Access keys', 'noegler'),
-    hjaelpePanel('noegler'),
-
-    admin ? el('h2', { text: 'This server' }) : null,
-    admin ? serverAfsnit() : null,
+    admin ? foldAfsnit('server', 'This server', null, serverAfsnit) : null,
   ]);
 }
 
@@ -2686,6 +2682,13 @@ function dropZone() {
     // ikke vise .zip-filer.
     accept: '.csv,.txt,.json,.zip,text/csv,text/plain,application/json,application/zip',
     onchange: (e) => laesImportFil(e.target.files && e.target.files[0]),
+    /*
+     * STOP boblingen. Feltet ligger INDE i zonen, saa dets eget klik bobler
+     * op til zonens onclick, som kalder felt.click() igen. Maalt: ét tryk
+     * gav TO klik paa zonen, og den gentagelse afbryder filvaelgeren, saa
+     * dialogen aldrig aabner (Andreas, 2026-08-29).
+     */
+    onclick: (e) => e.stopPropagation(),
   });
 
   return el('div', {
@@ -2695,8 +2698,12 @@ function dropZone() {
      * dragover SKAL kalde preventDefault - ellers aabner browseren filen i
      * stedet for at give os den, og siden bliver erstattet af raa JSON.
      */
+    // BAADE dragenter og dragover skal preventDefault. Uden dragenter
+    // afviser nogle browsere slippet, foer dragover naar at sige ja.
+    ondragenter: (e) => { e.preventDefault(); },
     ondragover: (e) => {
       e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
       if (!state.import.overZonen) { state.import.overZonen = true; opdaterZone(); }
     },
     ondragleave: () => { state.import.overZonen = false; opdaterZone(); },
@@ -3154,6 +3161,68 @@ function hjaelpePanel(navn) {
 /** Overskrift med et "?" ved siden af. */
 function afsnitshoved(tekst, hjaelpNavn, niveau) {
   return el(niveau || 'h2', { class: 'medhjaelp' }, [tekst, hjaelpeKnap(hjaelpNavn)]);
+}
+
+
+/* ------------------------------------------------------ foldbare afsnit */
+
+/*
+ * Indstillinger foldet sammen.
+ *
+ * Siden var vokset til otte afsnit, hvoraf ét alene har 62 afkrydsningsfelter.
+ * Alt aabent paa én gang betyder, at man ruller forbi det meste for at naa
+ * det, man kom efter (Andreas, 2026-08-29).
+ *
+ * Tilstanden gemmes i localStorage og ikke i `state`: hvilke afsnit man har
+ * aabnet, er en vane pr. browser, ikke data. Den skal derfor ikke i
+ * settings-tabellen og ikke synkroniseres mellem enheder.
+ */
+function foldetAf(id) {
+  try {
+    const raa = localStorage.getItem('spolen_foldet');
+    const f = raa ? JSON.parse(raa) : null;
+    // Standard: ALT foldet sammen. Man aabner det, man skal bruge.
+    if (!f || typeof f !== 'object') return true;
+    return f[id] !== false;
+  } catch {
+    // localStorage kan kaste i private vinduer og naar site-data er spaerret.
+    return true;
+  }
+}
+
+function saetFoldet(id, foldet) {
+  try {
+    const raa = localStorage.getItem('spolen_foldet');
+    const f = (raa ? JSON.parse(raa) : null) || {};
+    f[id] = foldet;
+    localStorage.setItem('spolen_foldet', JSON.stringify(f));
+  } catch { /* uden lager foldes der bare igen naeste gang */ }
+}
+
+/**
+ * Et afsnit med en overskrift, der kan klikkes.
+ *
+ * @param {function} byg  Indholdet bygges FOERST naar afsnittet er aabent.
+ *   Det er ikke kun pænt: tjenestelisten er 62 raekker med hvert sit
+ *   billede, og at bygge dem for at skjule dem er spild ved hver gentegning.
+ */
+function foldAfsnit(id, titel, hjaelpNavn, byg) {
+  const foldet = foldetAf(id);
+  return el('section', { class: `foldafsnit${foldet ? ' foldet' : ''}` }, [
+    el('div', { class: 'foldhoved' }, [
+      el('button', {
+        class: 'foldknap-titel',
+        'aria-expanded': foldet ? 'false' : 'true',
+        onclick: () => { saetFoldet(id, !foldet); tegnSide(); },
+      }, [
+        el('span', { class: 'foldpil', text: foldet ? '▸' : '▾' }),
+        el('span', { text: titel }),
+      ]),
+      hjaelpNavn ? hjaelpeKnap(hjaelpNavn) : null,
+    ]),
+    (!foldet && hjaelpNavn) ? hjaelpePanel(hjaelpNavn) : null,
+    foldet ? null : el('div', { class: 'foldindhold' }, [byg()]),
+  ]);
 }
 
 /* ---- pa_notifik.js ---- */

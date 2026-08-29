@@ -11,36 +11,32 @@
  */
 function settingsSide() {
   const admin = state.user && state.user.isAdmin;
+  /*
+   * Alle hovedpunkter er foldbare og starter LUKKEDE.
+   *
+   * Indholdet bygges foerst, naar afsnittet aabnes - tjenestelisten alene er
+   * 62 raekker med hvert sit logo.
+   */
   return el('div', {}, [
     el('h1', { text: 'Settings' }),
 
-    afsnitshoved('Metadata', 'tmdb'),
-    hjaelpePanel('tmdb'),
-    admin ? tmdbAfsnit() : el('p', { class: 'dim', text:
-      'Only the administrator can change the TMDB key.' }),
+    foldAfsnit('metadata', 'Metadata', 'tmdb', () => (admin
+      ? tmdbAfsnit()
+      : el('p', { class: 'dim', text: 'Only the administrator can change the TMDB key.' }))),
 
-    el('h2', { text: 'Your preferences' }),
-    personligeAfsnit(),
+    foldAfsnit('praef', 'Your preferences', null, personligeAfsnit),
 
-    el('h2', { text: 'Your streaming services' }),
-    tjenesteAfsnit(),
+    foldAfsnit('tjenester', 'Your streaming services', null, tjenesteAfsnit),
 
-    importSide(),
+    foldAfsnit('import', 'Import your history', null, importSide),
 
-    noegleAfsnit(),
+    admin ? foldAfsnit('traktapp', 'Trakt application', 'trakt', traktAppAfsnit) : null,
 
-    admin ? afsnitshoved('Trakt application', 'trakt') : null,
-    admin ? hjaelpePanel('trakt') : null,
-    admin ? traktAppAfsnit() : null,
+    foldAfsnit('notifik', 'Notifications', null, notifikationAfsnit),
 
-    el('h2', { text: 'Notifications' }),
-    notifikationAfsnit(),
+    foldAfsnit('noegler', 'Access keys', 'noegler', noegleAfsnit),
 
-    afsnitshoved('Access keys', 'noegler'),
-    hjaelpePanel('noegler'),
-
-    admin ? el('h2', { text: 'This server' }) : null,
-    admin ? serverAfsnit() : null,
+    admin ? foldAfsnit('server', 'This server', null, serverAfsnit) : null,
   ]);
 }
 

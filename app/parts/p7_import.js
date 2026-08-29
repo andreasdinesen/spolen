@@ -911,6 +911,13 @@ function dropZone() {
     // ikke vise .zip-filer.
     accept: '.csv,.txt,.json,.zip,text/csv,text/plain,application/json,application/zip',
     onchange: (e) => laesImportFil(e.target.files && e.target.files[0]),
+    /*
+     * STOP boblingen. Feltet ligger INDE i zonen, saa dets eget klik bobler
+     * op til zonens onclick, som kalder felt.click() igen. Maalt: ét tryk
+     * gav TO klik paa zonen, og den gentagelse afbryder filvaelgeren, saa
+     * dialogen aldrig aabner (Andreas, 2026-08-29).
+     */
+    onclick: (e) => e.stopPropagation(),
   });
 
   return el('div', {
@@ -920,8 +927,12 @@ function dropZone() {
      * dragover SKAL kalde preventDefault - ellers aabner browseren filen i
      * stedet for at give os den, og siden bliver erstattet af raa JSON.
      */
+    // BAADE dragenter og dragover skal preventDefault. Uden dragenter
+    // afviser nogle browsere slippet, foer dragover naar at sige ja.
+    ondragenter: (e) => { e.preventDefault(); },
     ondragover: (e) => {
       e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
       if (!state.import.overZonen) { state.import.overZonen = true; opdaterZone(); }
     },
     ondragleave: () => { state.import.overZonen = false; opdaterZone(); },

@@ -2545,3 +2545,50 @@ button.version-linje.gammel:hover { text-decoration: underline; }
 .dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
 .dropzone.over .dropzone-tekst { color: var(--accent-text); }
 .dropzone-tekst { font-weight: 600; margin-bottom: 4px; }
+
+/* ---- Brede visninger ----------------------------------------------
+ * Dodas .main er en LAESESOEJLE paa 820 px, og det er rigtigt for tekst.
+ * Et plakatgitter er noget andet: paa en bred skaerm gav 820 px kun TO
+ * kolonner, mens der var plads til seks (Andreas, 2026-08-29).
+ *
+ * Kun de sider, der VISER et gitter, bliver brede. Titelvisningens resume
+ * og indstillingerne bliver ved med at vaere en laesesoejle - en linje paa
+ * 1600 px er ulaeselig.
+ */
+#root[data-view="library"] .main,
+#root[data-view="calendar"] .main,
+#root[data-view="stats"] .main {
+  max-width: min(1600px, 100%);
+}
+/* Topbaren skal foelge med, ellers staar soegefeltet og indholdet i to
+   forskellige bredder. */
+#root[data-view="library"] .topbar,
+#root[data-view="calendar"] .topbar,
+#root[data-view="stats"] .topbar {
+  max-width: min(1600px, 100%);
+}
+
+/* Plakaterne maa gerne blive lidt stoerre, naar der er plads - men et
+   gitter med 12 bittesmaa kort er ikke bedre end et med fire store. */
+@media (min-width: 1100px) {
+  .plakater { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+}
+
+/* ---- Foldbare afsnit ---- */
+.foldafsnit { border-top: 1px solid var(--border-soft); }
+.foldhoved { display: flex; align-items: center; gap: 8px; }
+.foldknap-titel {
+  flex: 1;
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 2px;
+  background: none; border: 0; cursor: pointer;
+  color: var(--text);
+  font: inherit; font-size: 1.15rem; font-weight: 650;
+  text-align: left;
+}
+.foldknap-titel:hover { color: var(--accent-text); }
+.foldknap-titel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.foldpil { color: var(--muted); font-size: .9rem; width: 14px; flex: none; }
+.foldindhold { padding-bottom: 20px; }
+/* Overskrifter INDE i et foldet afsnit skal ikke konkurrere med det. */
+.foldindhold h2 { font-size: 1rem; margin-top: 18px; }

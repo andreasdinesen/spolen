@@ -148,3 +148,65 @@ function hjaelpePanel(navn) {
 function afsnitshoved(tekst, hjaelpNavn, niveau) {
   return el(niveau || 'h2', { class: 'medhjaelp' }, [tekst, hjaelpeKnap(hjaelpNavn)]);
 }
+
+
+/* ------------------------------------------------------ foldbare afsnit */
+
+/*
+ * Indstillinger foldet sammen.
+ *
+ * Siden var vokset til otte afsnit, hvoraf ét alene har 62 afkrydsningsfelter.
+ * Alt aabent paa én gang betyder, at man ruller forbi det meste for at naa
+ * det, man kom efter (Andreas, 2026-08-29).
+ *
+ * Tilstanden gemmes i localStorage og ikke i `state`: hvilke afsnit man har
+ * aabnet, er en vane pr. browser, ikke data. Den skal derfor ikke i
+ * settings-tabellen og ikke synkroniseres mellem enheder.
+ */
+function foldetAf(id) {
+  try {
+    const raa = localStorage.getItem('spolen_foldet');
+    const f = raa ? JSON.parse(raa) : null;
+    // Standard: ALT foldet sammen. Man aabner det, man skal bruge.
+    if (!f || typeof f !== 'object') return true;
+    return f[id] !== false;
+  } catch {
+    // localStorage kan kaste i private vinduer og naar site-data er spaerret.
+    return true;
+  }
+}
+
+function saetFoldet(id, foldet) {
+  try {
+    const raa = localStorage.getItem('spolen_foldet');
+    const f = (raa ? JSON.parse(raa) : null) || {};
+    f[id] = foldet;
+    localStorage.setItem('spolen_foldet', JSON.stringify(f));
+  } catch { /* uden lager foldes der bare igen naeste gang */ }
+}
+
+/**
+ * Et afsnit med en overskrift, der kan klikkes.
+ *
+ * @param {function} byg  Indholdet bygges FOERST naar afsnittet er aabent.
+ *   Det er ikke kun pænt: tjenestelisten er 62 raekker med hvert sit
+ *   billede, og at bygge dem for at skjule dem er spild ved hver gentegning.
+ */
+function foldAfsnit(id, titel, hjaelpNavn, byg) {
+  const foldet = foldetAf(id);
+  return el('section', { class: `foldafsnit${foldet ? ' foldet' : ''}` }, [
+    el('div', { class: 'foldhoved' }, [
+      el('button', {
+        class: 'foldknap-titel',
+        'aria-expanded': foldet ? 'false' : 'true',
+        onclick: () => { saetFoldet(id, !foldet); tegnSide(); },
+      }, [
+        el('span', { class: 'foldpil', text: foldet ? '▸' : '▾' }),
+        el('span', { text: titel }),
+      ]),
+      hjaelpNavn ? hjaelpeKnap(hjaelpNavn) : null,
+    ]),
+    (!foldet && hjaelpNavn) ? hjaelpePanel(hjaelpNavn) : null,
+    foldet ? null : el('div', { class: 'foldindhold' }, [byg()]),
+  ]);
+}
