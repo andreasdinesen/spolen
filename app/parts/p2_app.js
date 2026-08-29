@@ -129,7 +129,7 @@ function skal(indhold) {
         if (s.id === 'library') { await hentBibliotek(); tegnSide(); }
         // Noeglens tilstand hentes, naar man aabner siden - ikke ved login.
         // Det er et rigtigt TMDB-kald, og det skal ikke koere hver gang.
-        if (s.id === 'settings') { await Promise.all([hentSettings(), tjekTmdb(), hentTjenester(), hentNoegler(), hentPlexWebhook()]); tegnSide(); }
+        if (s.id === 'settings') { await Promise.all([hentSettings(), tjekTmdb(), hentTjenester(), hentNoegler(), hentPlexWebhook(), hentPush()]); tegnSide(); }
         if (s.id === 'calendar') { await hentKalender(); tegnSide(); }
         if (s.id === 'stats') { await hentStats(); tegnSide(); }
         // Paa en telefon skal menuen lukke sig selv, naar man har valgt.

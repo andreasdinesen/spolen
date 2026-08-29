@@ -14,7 +14,8 @@ function importSide() {
   return el('div', {}, [
     el('h2', { text: 'Import your history' }),
     el('p', { class: 'dim lille', text:
-      'Netflix viewing activity, Trakt, Letterboxd, IMDb or TV Time — as a .csv file. '
+      'Netflix viewing activity, Trakt, Letterboxd, IMDb or TV Time — as a .csv file, '
+      + 'or the whole GDPR export as a .zip. '
       + 'Sequel syncs to Trakt, so a Trakt export is the way out of Sequel.' }),
 
     el('div', { class: 'formgrid' }, [
@@ -45,6 +46,9 @@ function analyseKort(a) {
 
   return el('div', { class: 'card' }, [
     el('h3', { text: a.formatName }),
+    state.import.zipNavn
+      ? el('p', { class: 'dim lille', text: `From ${state.import.zipNavn} inside the zip.` })
+      : null,
     el('p', { class: 'dim', text:
       `${a.rows} rows — ${a.movies} films, ${a.episodes} episodes, ${a.shows} shows. `
       + `${a.withDates} have a date.`
@@ -115,7 +119,7 @@ function importFremdrift(s) {
 }
 
 function tomImport() {
-  return { tekst: '', analyse: null, status: null, fejl: '', dateOrder: null };
+  return { tekst: '', analyse: null, status: null, fejl: '', dateOrder: null, zipNavn: null };
 }
 
 async function laesImportFil(fil) {
@@ -125,7 +129,43 @@ async function laesImportFil(fil) {
   try {
     // Filen laeses i BROWSEREN og sendes som tekst. Serveren parser den med
     // det SAMME modul, saa der ikke findes to tolkninger af den samme fil.
-    const tekst = await fil.text();
+    let tekst;
+    if (/\.zip$/i.test(fil.name) || fil.type === 'application/zip') {
+      /*
+       * En GDPR-eksport er et zip-arkiv med snesevis af filer. Vi pakker ud
+       * i BROWSEREN og sender kun den CSV, der viser sig at vaere en
+       * historik - resten (profiler, enheder, betalinger) hoerer ikke
+       * hjemme paa serveren overhovedet.
+       */
+      const filer = await zipFindCsv(await fil.arrayBuffer());
+      if (!filer.length) {
+        state.import.fejl = 'No .csv files inside that zip.';
+        tegnSide();
+        return;
+      }
+      // Lad formatgenkendelsen afgoere hvilken. Den stoerste genkendte fil
+      // vinder: en eksport har tit baade "watched" og en lille "watchlist".
+      let bedst = null;
+      for (const f of filer) {
+        try {
+          const a = await api('/import/analyse', { method: 'POST', body: { text: f.tekst } });
+          if (a.rows && (!bedst || a.rows > bedst.analyse.rows)) bedst = { fil: f, analyse: a };
+        } catch { /* ikke et format vi kender - proev naeste */ }
+      }
+      if (!bedst) {
+        state.import.fejl = `None of the ${filer.length} csv files in that zip is a format `
+          + `spolen knows: ${filer.map((f) => f.navn.split('/').pop()).slice(0, 5).join(', ')}`;
+        tegnSide();
+        return;
+      }
+      state.import.tekst = bedst.fil.tekst;
+      state.import.analyse = bedst.analyse;
+      state.import.dateOrder = bedst.analyse.dateOrder;
+      state.import.zipNavn = bedst.fil.navn;
+      tegnSide();
+      return;
+    }
+    tekst = await fil.text();
     if (tekst.length > 20 * 1024 * 1024) {
       state.import.fejl = 'That file is larger than 20 MB.';
       tegnSide();
@@ -174,6 +214,99 @@ async function poll() {
     if (s.running) setTimeout(poll, 2000);
     else await Promise.all([hentUpNext(), hentBibliotek()]);
   } catch { /* en afbrudt polling er ikke vaerd at larme om */ }
+}
+
+
+/* --------------------------------------------------------------- zip */
+
+/*
+ * Zip-laeser til GDPR-eksporter (TV Time, Netflix, Letterboxd).
+ *
+ * Skrevet selv, fordi browseren allerede har det svaere: DecompressionStream
+ * kan 'deflate-raw', som er praecis det, en zip bruger. Tilbage er kun at
+ * finde ud af, HVOR i filen hver post begynder - og det er en veldokumenteret
+ * struktur, ikke en gaette-leg.
+ *
+ * Vi laeser den CENTRALE mappe bagfra (den er sandheden om, hvad arkivet
+ * indeholder) og bruger den til at finde hver posts lokale hoved. At scanne
+ * forfra efter lokale hoveder virker paa simple arkiver og fejler paa dem,
+ * der er skrevet i stroem - dér staar stoerrelsen foerst EFTER dataene.
+ */
+const ZIP_EOCD = 0x06054b50;   // End of central directory
+const ZIP_CEN = 0x02014b50;    // Central directory header
+const ZIP_LOC = 0x04034b50;    // Local file header
+
+function zipPoster(buf) {
+  const dv = new DataView(buf);
+  // EOCD ligger til sidst, men kan have en kommentar efter sig. Soeg bagfra.
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= 0 && i > buf.byteLength - 22 - 65536; i--) {
+    if (dv.getUint32(i, true) === ZIP_EOCD) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('That does not look like a zip file.');
+
+  const antal = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);      // start paa den centrale mappe
+  const ud = [];
+  for (let i = 0; i < antal; i++) {
+    if (dv.getUint32(p, true) !== ZIP_CEN) break;
+    const metode = dv.getUint16(p + 10, true);
+    const komp = dv.getUint32(p + 20, true);
+    const navnLen = dv.getUint16(p + 28, true);
+    const ekstraLen = dv.getUint16(p + 30, true);
+    const kommentarLen = dv.getUint16(p + 32, true);
+    const lokal = dv.getUint32(p + 42, true);
+    const navn = new TextDecoder().decode(new Uint8Array(buf, p + 46, navnLen));
+    ud.push({ navn, metode, komp, lokal });
+    p += 46 + navnLen + ekstraLen + kommentarLen;
+  }
+  return ud;
+}
+
+/**
+ * Pakker ÉN post ud som tekst.
+ *
+ * Datastarten kan kun beregnes fra det LOKALE hoved: dets navne- og
+ * ekstra-felter har andre laengder end den centrale mappes, og bruger man
+ * mappens tal, lander man et par bytes forkert - og saa fejler
+ * dekomprimeringen med noget, der ikke ligner aarsagen.
+ */
+async function zipUdpak(buf, post) {
+  const dv = new DataView(buf);
+  if (dv.getUint32(post.lokal, true) !== ZIP_LOC) throw new Error('Broken zip entry.');
+  const navnLen = dv.getUint16(post.lokal + 26, true);
+  const ekstraLen = dv.getUint16(post.lokal + 28, true);
+  const start = post.lokal + 30 + navnLen + ekstraLen;
+  const raa = new Uint8Array(buf, start, post.komp);
+
+  if (post.metode === 0) return new TextDecoder().decode(raa);   // gemt uden komprimering
+  if (post.metode !== 8) throw new Error(`Unsupported compression in ${post.navn}.`);
+
+  const stroem = new Blob([raa]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Response(stroem).text();
+}
+
+/**
+ * Finder de CSV-filer i arkivet, der ligner en historik.
+ *
+ * En GDPR-eksport indeholder alt muligt - profiler, enheder, betalinger.
+ * Vi kigger kun paa .csv og lader FORMATGENKENDELSEN afgoere, om filen er
+ * brugbar: at gaette paa filnavne ville betyde, at eksporten kun virker,
+ * saa laenge tjenesten ikke omdoeber noget.
+ */
+async function zipFindCsv(buf) {
+  const poster = zipPoster(buf).filter((p) =>
+    /\.csv$/i.test(p.navn) && !p.navn.endsWith('/') && p.komp > 0
+    // __MACOSX er de ressourcegafler, macOS lægger i et zip-arkiv. De ligner
+    // rigtige filer og indeholder ingenting.
+    && !p.navn.startsWith('__MACOSX/'));
+  const ud = [];
+  for (const p of poster.slice(0, 40)) {
+    try {
+      ud.push({ navn: p.navn, tekst: await zipUdpak(buf, p) });
+    } catch { /* en ulaeselig post springes over - resten er stadig brugbar */ }
+  }
+  return ud;
 }
 
 /* ------------------------------------------------- trakt-appens noegler */

@@ -46,6 +46,7 @@ const statistik = require('./shared/statistik.js');
 const trakt = require('./trakt.js');
 const plex = require('./plex.js');
 const mcpModul = require('./mcp.js');
+const pushModul = require('./push.js');
 
 const DATA_DIR = process.env.DATA_DIR || process.cwd();
 
@@ -109,6 +110,7 @@ const PERSONLIGE_SETTINGS = new Set([
   'language',          // 'en-US' / 'da-DK' - sproget, TMDB svarer paa
   'services',          // JSON-array af udbyder-id'er brugeren abonnerer paa (S2)
   'theme',
+  'notify_new',          // '1'/'0' - besked om nye afsnit
   'plex_url',
   'plex_token',        // hemmelig - personlig, fordi hver bruger har sin egen konto
   'trakt_access_token',
@@ -468,6 +470,32 @@ const MIGRATIONS = [
         revoked_at INTEGER
       );
       CREATE INDEX ix_oauth_refresh_klient ON oauth_refresh(client_id) WHERE revoked_at IS NULL;
+    `);
+  },
+
+  function m7(d) {
+    /*
+     * Push-abonnementer (F2/F6).
+     *
+     * Endpointet er PRIMARY KEY: browseren giver den samme adresse igen ved
+     * et fornyet abonnement, og saa skal det opdatere - ikke lave en dublet,
+     * der sender den samme notifikation to gange.
+     *
+     * Noeglerne (p256dh, auth) er browserens egne og bruges til at kryptere
+     * beskeden, saa push-tjenesten ikke kan laese den. De er ikke
+     * hemmeligheder paa vores side, men de hoerer til ÉN bruger.
+     */
+    d.exec(`
+      CREATE TABLE push_subs (
+        endpoint   TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        p256dh     TEXT NOT NULL,
+        auth       TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_ok_at INTEGER,
+        fejl       INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX ix_push_bruger ON push_subs(user_id);
     `);
   },
 ];
@@ -2671,6 +2699,117 @@ async function koerImportRaekker(userId, raekker, formatNavn, sprunget) {
   return importStatus();
 }
 
+/* ---------------------------------------------------------------- push */
+
+/*
+ * Notifikationer om nye afsnit.
+ *
+ * VAPID-noeglerne hoerer til INSTALLATIONEN og laves én gang. Skifter den
+ * offentlige noegle, doer alle eksisterende abonnementer - browseren binder
+ * sit abonnement til netop den noegle. Derfor genereres de kun, hvis de
+ * mangler, og de slettes aldrig af sig selv.
+ */
+function vapidNoegler() {
+  let off = getSetting('*', 'vapid_offentlig', '');
+  let priv = getSetting('*', 'vapid_privat', '');
+  if (!off || !priv) {
+    const n = pushModul.nyeVapidNoegler();
+    setSetting('*', 'vapid_offentlig', n.offentlig);
+    setSetting('*', 'vapid_privat', n.privat);
+    off = n.offentlig; priv = n.privat;
+    log('nye VAPID-noegler oprettet');
+  }
+  return { offentlig: off, privat: priv };
+}
+
+/*
+ * `sub`-feltet i VAPID skal vaere en mailto: eller en https-adresse - det er
+ * push-tjenestens vej til at kontakte afsenderen. Vi har ingen mailadresse
+ * at give, og maa ikke opfinde brugerens, saa vi bruger serverens egen
+ * adresse.
+ */
+function vapidEmne() {
+  const d = getSetting('*', 'public_url', '');
+  return d ? d.replace(/\/+$/, '') : 'mailto:spolen@localhost';
+}
+
+function pushAbonnementer(userId) {
+  return db.prepare('SELECT endpoint, p256dh, auth FROM push_subs WHERE user_id = ?')
+    .all(userId).map((r) => ({ endpoint: r.endpoint, keys: { p256dh: r.p256dh, auth: r.auth } }));
+}
+
+/**
+ * Sender én besked til alle en brugers enheder.
+ *
+ * Doede abonnementer SLETTES med det samme (404/410 fra push-tjenesten
+ * betyder, at browseren er afmeldt). Bliver de liggende, sender vi til dem
+ * for evigt og faar en voksende fejlrate, der ikke betyder noget.
+ */
+async function sendPush(userId, titel, tekst, url) {
+  const abon = pushAbonnementer(userId);
+  if (!abon.length) return { sendt: 0, doede: 0, ingen: true };
+  const v = vapidNoegler();
+  const krop = JSON.stringify({ title: titel, body: tekst, url: url || '/' });
+  let sendt = 0;
+  let doede = 0;
+  for (const a of abon) {
+    const r = await pushModul.send(a, krop, v, vapidEmne());
+    if (r.ok) {
+      sendt++;
+      db.prepare('UPDATE push_subs SET last_ok_at = ?, fejl = 0 WHERE endpoint = ?')
+        .run(now(), a.endpoint);
+    } else if (r.doed) {
+      doede++;
+      db.prepare('DELETE FROM push_subs WHERE endpoint = ?').run(a.endpoint);
+    } else {
+      db.prepare('UPDATE push_subs SET fejl = fejl + 1 WHERE endpoint = ?').run(a.endpoint);
+      log(`push fejlede (${r.status}): ${r.fejl || ''}`);
+    }
+  }
+  return { sendt, doede };
+}
+
+/*
+ * Hvem skal have besked om hvad?
+ *
+ * Kun afsnit, der sendes I DAG, af serier brugeren FOELGER - og kun én gang
+ * pr. afsnit. Uden det sidste ville det timevise job sende den samme besked
+ * 24 gange paa en dag, og folk slaar notifikationer fra efter den anden.
+ */
+async function pushOmNyeAfsnit() {
+  const idag = beregn.isoDato(now());
+  const sendteI = new Set(
+    (getSetting('*', 'push_sendt', '') || '').split(',').filter(Boolean));
+  let nye = 0;
+  for (const u of db.prepare('SELECT id FROM users').all()) {
+    if (getSetting(u.id, 'notify_new', '1') !== '1') continue;
+    if (!pushAbonnementer(u.id).length) continue;
+    for (const tr of hentItems(u.id, { kind: 'tracking' })) {
+      if (tr.state !== 'watching' && tr.state !== 'watchlist') continue;
+      if (tr.notifyNew === false) continue;
+      const titel = hentTitel(tr.titleId);
+      if (!titel || titel.kind !== 'tv') continue;
+      for (const e of hentAfsnit(tr.titleId)) {
+        if (e.airDate !== idag) continue;
+        const noegle = `${u.id}:${e.id}`;
+        if (sendteI.has(noegle)) continue;
+        sendteI.add(noegle);
+        nye++;
+        await sendPush(u.id,
+          titel.name,
+          `S${e.season}E${e.number}${e.name ? ` · ${e.name}` : ''} airs today`,
+          `/#title-${titel.id}`);
+      }
+    }
+  }
+  if (nye) {
+    // Hold listen kort: kun de sidste 400 noegler. Den er en huskeseddel,
+    // ikke en historik.
+    setSetting('*', 'push_sendt', [...sendteI].slice(-400).join(','));
+  }
+  return nye;
+}
+
 /* --------------------------------------------------------------- oauth */
 
 /**
@@ -3435,6 +3574,117 @@ const ROUTES = {
     sendJson(res, 200, gemWatches(g.user.id, liste));
   },
 
+  /* ---------------------------------------------------------- sofalisten */
+
+  /*
+   * Lister, man kan dele med skriveret (H2).
+   *
+   * En "sofaliste" er ikke en ny slags data - det er en almindelig liste,
+   * delt med `can_write`. Derfor er der ingen ny tabel: delingen ligger
+   * allerede i shares, og en liste, alle kan laegge i, er den samme liste
+   * set fra en anden bruger.
+   *
+   * DET AFGOERENDE er, at man kan se BAADE sine egne og dem, andre har delt -
+   * og at de to ikke blandes sammen til én liste, hvor man ikke kan se, hvis
+   * den er.
+   */
+  'GET /api/lists': (req, res) => {
+    const g = godkend(req, res, 'read');
+    if (!g) return;
+    const mine = hentItems(g.user.id, { kind: 'list' }).map((l) => ({
+      list: l, ejer: g.user.username, ejerId: g.user.id, minEgen: true, kanSkrive: true,
+      items: hentItems(g.user.id, { kind: 'listItem' }).filter((i) => i.listId === l.id),
+    }));
+
+    /*
+     * Delt MED mig. Hentes gennem delings-tildelingerne - ikke ved at
+     * slaa user_id-filteret fra. hentItems betyder stadig "mit eget".
+     */
+    const delte = [];
+    for (const d of hentDeltMedMig(g.user.id)) {
+      if (d.subjectKind !== 'list' && d.subjectKind !== 'profile') continue;
+      const ejerLister = d.subjectKind === 'profile'
+        ? hentItems(d.ownerId, { kind: 'list' })
+        : hentItems(d.ownerId, { kind: 'list', ids: [d.subjectId] });
+      for (const l of ejerLister) {
+        if (delte.some((x) => x.list.id === l.id)) continue;
+        delte.push({
+          list: l, ejer: d.owner, ejerId: d.ownerId, minEgen: false,
+          kanSkrive: !!d.canWrite,
+          items: hentItems(d.ownerId, { kind: 'listItem' }).filter((i) => i.listId === l.id),
+        });
+      }
+    }
+
+    // Titlerne slaas op ÉN gang for alle lister - ikke pr. element.
+    const ids = [...new Set([...mine, ...delte].flatMap((l) => l.items.map((i) => i.titleId)))];
+    const titler = new Map(hentTitler(ids).map((t) => [t.id, t]));
+    const berig = (l) => Object.assign({}, l, {
+      items: l.items
+        .map((i) => Object.assign({}, i, { title: titler.get(i.titleId) || null }))
+        .sort((a, b) => (a.position || 0) - (b.position || 0)),
+    });
+    sendJson(res, 200, { mine: mine.map(berig), shared: delte.map(berig) });
+  },
+
+  /*
+   * Laeg en titel paa en liste - ogsaa en, der tilhoerer en anden.
+   *
+   * `maaSkrive` afgoer det, og den ser KUN paa en list-deling med can_write.
+   * En profil-deling giver laeseadgang, ikke skriveadgang: at nogen viser
+   * dig sin historik, betyder ikke, at du maa aendre i den.
+   */
+  'POST /api/lists/add': async (req, res) => {
+    const g = godkend(req, res, 'write');
+    if (!g) return;
+    const body = await readJsonBody(req, g.viaToken);
+    const listId = str(body.listId, 64);
+    const titleId = str(body.titleId, 64);
+    const ejerId = str(body.ownerId, 64) || g.user.id;
+    if (!listId || !titleId) {
+      apiFejl(res, 400, 'bad_request', 'listId and titleId are required.');
+      return;
+    }
+    if (!maaSkrive(g.user.id, ejerId, listId)) {
+      // 404 og ikke 403: man skal ikke kunne afsoege, hvilke lister andre har.
+      apiFejl(res, 404, 'not_found', 'No such list.');
+      return;
+    }
+    if (!hentItem(ejerId, listId)) { apiFejl(res, 404, 'not_found', 'No such list.'); return; }
+    if (!hentTitel(titleId)) {
+      apiFejl(res, 400, 'unknown_title', 'That title is not in the library yet.');
+      return;
+    }
+    // Elementet gemmes hos LISTENS EJER - ellers ville det forsvinde for
+    // ham selv, og listen ville se forskellig ud for hver deltager.
+    const findes = hentItems(ejerId, { kind: 'listItem' })
+      .find((i) => i.listId === listId && i.titleId === titleId);
+    if (findes) { sendJson(res, 200, { item: findes, dublet: true }); return; }
+    const item = gemItem(ejerId, {
+      kind: 'listItem', listId, titleId,
+      position: hentItems(ejerId, { kind: 'listItem' }).filter((i) => i.listId === listId).length,
+      addedAt: now(),
+    });
+    sendJson(res, 200, { item, dublet: false });
+  },
+
+  'POST /api/lists/remove': async (req, res) => {
+    const g = godkend(req, res, 'write');
+    if (!g) return;
+    const body = await readJsonBody(req, g.viaToken);
+    const listId = str(body.listId, 64);
+    const ejerId = str(body.ownerId, 64) || g.user.id;
+    if (!maaSkrive(g.user.id, ejerId, listId)) {
+      apiFejl(res, 404, 'not_found', 'No such list.');
+      return;
+    }
+    const item = hentItems(ejerId, { kind: 'listItem' })
+      .find((i) => i.listId === listId && i.titleId === str(body.titleId, 64));
+    if (!item) { apiFejl(res, 404, 'not_found', 'Not on that list.'); return; }
+    sletItem(ejerId, item.id);
+    sendJson(res, 200, { ok: true });
+  },
+
   /* ------------------------------------------------------------- deling */
 
   /*
@@ -3699,6 +3949,83 @@ const ROUTES = {
       return;
     }
     sendJson(res, 200, markerTilOgMed(g.user.id, titleId, episodeId, beregn.isoDato(now())));
+  },
+
+  /* ------------------------------------------------------- notifikationer */
+
+  'GET /api/push': (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    sendJson(res, 200, {
+      // Den OFFENTLIGE noegle er ikke en hemmelighed - browseren skal have
+      // den for at kunne abonnere.
+      key: vapidNoegler().offentlig,
+      subscriptions: db.prepare(
+        'SELECT endpoint, created_at, last_ok_at FROM push_subs WHERE user_id = ?')
+        .all(user.id).map((r) => ({
+          // Kun vaertsnavnet - hele endpointet er en adresse, der kan sende
+          // til brugerens telefon, og den skal ikke ligge i et API-svar,
+          // der maaske havner i en log.
+          service: (() => { try { return new URL(r.endpoint).host; } catch { return '?'; } })(),
+          createdAt: r.created_at, lastOkAt: r.last_ok_at,
+        })),
+      secure: isHttps(req),
+    });
+  },
+
+  'POST /api/push/subscribe': async (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const body = await readJsonBody(req);
+    const endpoint = str(body.endpoint, 600);
+    const p256dh = str(body.p256dh, 200);
+    const auth = str(body.auth, 100);
+    if (!endpoint || !p256dh || !auth) {
+      apiFejl(res, 400, 'bad_request', 'endpoint, p256dh and auth are required.');
+      return;
+    }
+    if (!/^https:\/\//.test(endpoint)) {
+      apiFejl(res, 400, 'bad_request', 'The push endpoint must be https.');
+      return;
+    }
+    // ON CONFLICT: browseren giver samme endpoint igen ved fornyelse, og en
+    // dublet ville sende den samme besked to gange.
+    db.prepare(`INSERT INTO push_subs (endpoint, user_id, p256dh, auth, created_at)
+                VALUES (?,?,?,?,?)
+                ON CONFLICT(endpoint) DO UPDATE SET
+                  user_id = excluded.user_id, p256dh = excluded.p256dh,
+                  auth = excluded.auth, fejl = 0`)
+      .run(endpoint, user.id, p256dh, auth, now());
+    sendJson(res, 200, { ok: true });
+  },
+
+  'POST /api/push/unsubscribe': async (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const body = await readJsonBody(req);
+    const e = str(body.endpoint, 600);
+    if (e) db.prepare('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?').run(e, user.id);
+    else db.prepare('DELETE FROM push_subs WHERE user_id = ?').run(user.id);
+    sendJson(res, 200, { ok: true });
+  },
+
+  /*
+   * Send en proevebesked.
+   *
+   * Den er ikke pynt: push kan ikke proeves paa anden maade end at en
+   * notifikation faktisk lander. Svaret siger, hvor mange enheder der tog
+   * imod, og hvor mange der var doede.
+   */
+  'POST /api/push/test': async (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const r = await sendPush(user.id, 'spolen',
+      'If you can read this, notifications work.', '/');
+    if (r.ingen) {
+      apiFejl(res, 400, 'no_subscription', 'This browser is not subscribed yet.');
+      return;
+    }
+    sendJson(res, 200, r);
   },
 
   /* --------------------------------------------------------- adgangsnoegler */
@@ -4543,8 +4870,10 @@ setInterval(sweep, 6 * 3600 * 1000).unref();
  */
 setTimeout(() => {
   koerOpdatering().catch((e) => logError(`opdatering: ${e.message}`));
+  pushOmNyeAfsnit().catch((e) => logError(`push: ${e.message}`));
   setInterval(() => {
     koerOpdatering().catch((e) => logError(`opdatering: ${e.message}`));
+    pushOmNyeAfsnit().catch((e) => logError(`push: ${e.message}`));
   }, 3600 * 1000).unref();
 }, 60 * 1000).unref();
 

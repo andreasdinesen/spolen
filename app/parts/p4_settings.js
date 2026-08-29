@@ -33,6 +33,9 @@ function settingsSide() {
     admin ? hjaelpePanel('trakt') : null,
     admin ? traktAppAfsnit() : null,
 
+    el('h2', { text: 'Notifications' }),
+    notifikationAfsnit(),
+
     afsnitshoved('Access keys', 'noegler'),
     hjaelpePanel('noegler'),
 

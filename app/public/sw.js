@@ -14,7 +14,7 @@
  * skift. Kun de statiske filer gemmes.
  */
 
-const VERSION = 2;               /* stemples af build_rune.py */
+const VERSION = 3;               /* stemples af build_rune.py */
 const CACHE = `spolen-v${VERSION}`;
 
 /* Samme ?v=-stempler som index.html, ellers henter appen én fil fra cachen
@@ -86,5 +86,48 @@ self.addEventListener('fetch', (e) => {
       if (skal) return skal;
       throw new Error('offline');
     }
+  })());
+});
+
+/* ------------------------------------------------------- notifikationer */
+
+/*
+ * Beskeden er krypteret af serveren og pakket ud af browseren, foer den
+ * naar hertil - vi faar ren JSON.
+ *
+ * `waitUntil` er ikke valgfri: uden den kan browseren lukke workeren, foer
+ * notifikationen er vist, og saa forsvinder beskeden lydloest.
+ */
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'spolen' }; }
+  e.waitUntil(self.registration.showNotification(d.title || 'spolen', {
+    body: d.body || '',
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    // Samme tag = en NY besked erstatter den gamle i stedet for at stable
+    // sig op. Ellers har man ti notifikationer om den samme serie.
+    tag: d.tag || d.url || 'spolen',
+    data: { url: d.url || '/' },
+  }));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const maal = (e.notification.data && e.notification.data.url) || '/';
+  e.waitUntil((async () => {
+    /*
+     * Er appen allerede aaben, skal den have FOKUS - ikke aabnes igen.
+     * Ellers ender man med en ny fane hver gang, man trykker paa en besked.
+     */
+    const klienter = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const k of klienter) {
+      if (k.url.includes(self.location.origin)) {
+        await k.focus();
+        if ('navigate' in k) await k.navigate(maal).catch(() => null);
+        return;
+      }
+    }
+    await self.clients.openWindow(maal);
   })());
 });

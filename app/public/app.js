@@ -12,7 +12,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 2;
+const APP_VERSION = 3;
 
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
@@ -43,6 +43,7 @@ const state = {
   plex: { url: '', token: '', accountId: '', svar: null, fejl: '', webhook: null },
   noegler: { liste: [], ny: null },
   hjaelp: null,
+  push: { abon: [], noegle: '', fejl: '' },
   settings: {},
   delte: {},
   tmdb: { besked: '' },
@@ -312,7 +313,7 @@ function skal(indhold) {
         if (s.id === 'library') { await hentBibliotek(); tegnSide(); }
         // Noeglens tilstand hentes, naar man aabner siden - ikke ved login.
         // Det er et rigtigt TMDB-kald, og det skal ikke koere hver gang.
-        if (s.id === 'settings') { await Promise.all([hentSettings(), tjekTmdb(), hentTjenester(), hentNoegler(), hentPlexWebhook()]); tegnSide(); }
+        if (s.id === 'settings') { await Promise.all([hentSettings(), tjekTmdb(), hentTjenester(), hentNoegler(), hentPlexWebhook(), hentPush()]); tegnSide(); }
         if (s.id === 'calendar') { await hentKalender(); tegnSide(); }
         if (s.id === 'stats') { await hentStats(); tegnSide(); }
         // Paa en telefon skal menuen lukke sig selv, naar man har valgt.
@@ -994,6 +995,9 @@ function settingsSide() {
     admin ? hjaelpePanel('trakt') : null,
     admin ? traktAppAfsnit() : null,
 
+    el('h2', { text: 'Notifications' }),
+    notifikationAfsnit(),
+
     afsnitshoved('Access keys', 'noegler'),
     hjaelpePanel('noegler'),
 
@@ -1650,7 +1654,8 @@ function importSide() {
   return el('div', {}, [
     el('h2', { text: 'Import your history' }),
     el('p', { class: 'dim lille', text:
-      'Netflix viewing activity, Trakt, Letterboxd, IMDb or TV Time — as a .csv file. '
+      'Netflix viewing activity, Trakt, Letterboxd, IMDb or TV Time — as a .csv file, '
+      + 'or the whole GDPR export as a .zip. '
       + 'Sequel syncs to Trakt, so a Trakt export is the way out of Sequel.' }),
 
     el('div', { class: 'formgrid' }, [
@@ -1681,6 +1686,9 @@ function analyseKort(a) {
 
   return el('div', { class: 'card' }, [
     el('h3', { text: a.formatName }),
+    state.import.zipNavn
+      ? el('p', { class: 'dim lille', text: `From ${state.import.zipNavn} inside the zip.` })
+      : null,
     el('p', { class: 'dim', text:
       `${a.rows} rows — ${a.movies} films, ${a.episodes} episodes, ${a.shows} shows. `
       + `${a.withDates} have a date.`
@@ -1751,7 +1759,7 @@ function importFremdrift(s) {
 }
 
 function tomImport() {
-  return { tekst: '', analyse: null, status: null, fejl: '', dateOrder: null };
+  return { tekst: '', analyse: null, status: null, fejl: '', dateOrder: null, zipNavn: null };
 }
 
 async function laesImportFil(fil) {
@@ -1761,7 +1769,43 @@ async function laesImportFil(fil) {
   try {
     // Filen laeses i BROWSEREN og sendes som tekst. Serveren parser den med
     // det SAMME modul, saa der ikke findes to tolkninger af den samme fil.
-    const tekst = await fil.text();
+    let tekst;
+    if (/\.zip$/i.test(fil.name) || fil.type === 'application/zip') {
+      /*
+       * En GDPR-eksport er et zip-arkiv med snesevis af filer. Vi pakker ud
+       * i BROWSEREN og sender kun den CSV, der viser sig at vaere en
+       * historik - resten (profiler, enheder, betalinger) hoerer ikke
+       * hjemme paa serveren overhovedet.
+       */
+      const filer = await zipFindCsv(await fil.arrayBuffer());
+      if (!filer.length) {
+        state.import.fejl = 'No .csv files inside that zip.';
+        tegnSide();
+        return;
+      }
+      // Lad formatgenkendelsen afgoere hvilken. Den stoerste genkendte fil
+      // vinder: en eksport har tit baade "watched" og en lille "watchlist".
+      let bedst = null;
+      for (const f of filer) {
+        try {
+          const a = await api('/import/analyse', { method: 'POST', body: { text: f.tekst } });
+          if (a.rows && (!bedst || a.rows > bedst.analyse.rows)) bedst = { fil: f, analyse: a };
+        } catch { /* ikke et format vi kender - proev naeste */ }
+      }
+      if (!bedst) {
+        state.import.fejl = `None of the ${filer.length} csv files in that zip is a format `
+          + `spolen knows: ${filer.map((f) => f.navn.split('/').pop()).slice(0, 5).join(', ')}`;
+        tegnSide();
+        return;
+      }
+      state.import.tekst = bedst.fil.tekst;
+      state.import.analyse = bedst.analyse;
+      state.import.dateOrder = bedst.analyse.dateOrder;
+      state.import.zipNavn = bedst.fil.navn;
+      tegnSide();
+      return;
+    }
+    tekst = await fil.text();
     if (tekst.length > 20 * 1024 * 1024) {
       state.import.fejl = 'That file is larger than 20 MB.';
       tegnSide();
@@ -1810,6 +1854,99 @@ async function poll() {
     if (s.running) setTimeout(poll, 2000);
     else await Promise.all([hentUpNext(), hentBibliotek()]);
   } catch { /* en afbrudt polling er ikke vaerd at larme om */ }
+}
+
+
+/* --------------------------------------------------------------- zip */
+
+/*
+ * Zip-laeser til GDPR-eksporter (TV Time, Netflix, Letterboxd).
+ *
+ * Skrevet selv, fordi browseren allerede har det svaere: DecompressionStream
+ * kan 'deflate-raw', som er praecis det, en zip bruger. Tilbage er kun at
+ * finde ud af, HVOR i filen hver post begynder - og det er en veldokumenteret
+ * struktur, ikke en gaette-leg.
+ *
+ * Vi laeser den CENTRALE mappe bagfra (den er sandheden om, hvad arkivet
+ * indeholder) og bruger den til at finde hver posts lokale hoved. At scanne
+ * forfra efter lokale hoveder virker paa simple arkiver og fejler paa dem,
+ * der er skrevet i stroem - dér staar stoerrelsen foerst EFTER dataene.
+ */
+const ZIP_EOCD = 0x06054b50;   // End of central directory
+const ZIP_CEN = 0x02014b50;    // Central directory header
+const ZIP_LOC = 0x04034b50;    // Local file header
+
+function zipPoster(buf) {
+  const dv = new DataView(buf);
+  // EOCD ligger til sidst, men kan have en kommentar efter sig. Soeg bagfra.
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= 0 && i > buf.byteLength - 22 - 65536; i--) {
+    if (dv.getUint32(i, true) === ZIP_EOCD) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('That does not look like a zip file.');
+
+  const antal = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);      // start paa den centrale mappe
+  const ud = [];
+  for (let i = 0; i < antal; i++) {
+    if (dv.getUint32(p, true) !== ZIP_CEN) break;
+    const metode = dv.getUint16(p + 10, true);
+    const komp = dv.getUint32(p + 20, true);
+    const navnLen = dv.getUint16(p + 28, true);
+    const ekstraLen = dv.getUint16(p + 30, true);
+    const kommentarLen = dv.getUint16(p + 32, true);
+    const lokal = dv.getUint32(p + 42, true);
+    const navn = new TextDecoder().decode(new Uint8Array(buf, p + 46, navnLen));
+    ud.push({ navn, metode, komp, lokal });
+    p += 46 + navnLen + ekstraLen + kommentarLen;
+  }
+  return ud;
+}
+
+/**
+ * Pakker ÉN post ud som tekst.
+ *
+ * Datastarten kan kun beregnes fra det LOKALE hoved: dets navne- og
+ * ekstra-felter har andre laengder end den centrale mappes, og bruger man
+ * mappens tal, lander man et par bytes forkert - og saa fejler
+ * dekomprimeringen med noget, der ikke ligner aarsagen.
+ */
+async function zipUdpak(buf, post) {
+  const dv = new DataView(buf);
+  if (dv.getUint32(post.lokal, true) !== ZIP_LOC) throw new Error('Broken zip entry.');
+  const navnLen = dv.getUint16(post.lokal + 26, true);
+  const ekstraLen = dv.getUint16(post.lokal + 28, true);
+  const start = post.lokal + 30 + navnLen + ekstraLen;
+  const raa = new Uint8Array(buf, start, post.komp);
+
+  if (post.metode === 0) return new TextDecoder().decode(raa);   // gemt uden komprimering
+  if (post.metode !== 8) throw new Error(`Unsupported compression in ${post.navn}.`);
+
+  const stroem = new Blob([raa]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Response(stroem).text();
+}
+
+/**
+ * Finder de CSV-filer i arkivet, der ligner en historik.
+ *
+ * En GDPR-eksport indeholder alt muligt - profiler, enheder, betalinger.
+ * Vi kigger kun paa .csv og lader FORMATGENKENDELSEN afgoere, om filen er
+ * brugbar: at gaette paa filnavne ville betyde, at eksporten kun virker,
+ * saa laenge tjenesten ikke omdoeber noget.
+ */
+async function zipFindCsv(buf) {
+  const poster = zipPoster(buf).filter((p) =>
+    /\.csv$/i.test(p.navn) && !p.navn.endsWith('/') && p.komp > 0
+    // __MACOSX er de ressourcegafler, macOS lægger i et zip-arkiv. De ligner
+    // rigtige filer og indeholder ingenting.
+    && !p.navn.startsWith('__MACOSX/'));
+  const ud = [];
+  for (const p of poster.slice(0, 40)) {
+    try {
+      ud.push({ navn: p.navn, tekst: await zipUdpak(buf, p) });
+    } catch { /* en ulaeselig post springes over - resten er stadig brugbar */ }
+  }
+  return ud;
 }
 
 /* ------------------------------------------------- trakt-appens noegler */
@@ -2592,4 +2729,147 @@ function hjaelpePanel(navn) {
 /** Overskrift med et "?" ved siden af. */
 function afsnitshoved(tekst, hjaelpNavn, niveau) {
   return el(niveau || 'h2', { class: 'medhjaelp' }, [tekst, hjaelpeKnap(hjaelpNavn)]);
+}
+
+/* ---- pa_notifik.js ---- */
+
+/* ------------------------------------------------------- notifikationer */
+
+/*
+ * Notifikationer om nye afsnit.
+ *
+ * KRAEVER https. Over panelets IP:port findes hverken Notification eller
+ * PushManager, og et ubetinget kald ville kaste ved hver indlaesning (§4).
+ * Derfor siger fladen det HOEJT frem for at vise en knap, der ikke kan virke.
+ */
+function notifikationAfsnit() {
+  const n = state.push;
+  const kanTeknisk = 'Notification' in window && 'serviceWorker' in navigator
+    && 'PushManager' in window;
+
+  if (!kanTeknisk || (state.config && !state.config.secureContext)) {
+    return el('div', {}, [
+      el('p', { class: 'dim', text:
+        'Notifications need https. Open spolen on its own domain instead of the '
+        + 'panel’s IP address, and this section becomes available.' }),
+    ]);
+  }
+
+  const tilladelse = Notification.permission;
+  return el('div', {}, [
+    el('p', { class: 'dim lille', text:
+      'A notification when a new episode of something you follow airs. '
+      + 'One per episode — spolen checks every hour but never tells you twice.' }),
+
+    tilladelse === 'denied'
+      ? el('p', { class: 'noeglestatus mangler', text:
+          'Your browser is blocking notifications for this site. You have to allow '
+          + 'them in the browser’s own settings — a website cannot ask again once denied.' })
+      : null,
+
+    n.abon.length
+      ? el('div', {}, [
+          el('p', { class: 'noeglestatus har', text:
+            `${n.abon.length} device${n.abon.length === 1 ? '' : 's'} subscribed.` }),
+          el('div', { class: 'liste' }, n.abon.map((a) => el('div', { class: 'item-row' }, [
+            el('span', { text: a.service }),
+            el('span', { class: 'dim lille', text: a.lastOkAt
+              ? `last delivered ${new Date(a.lastOkAt * 1000).toISOString().slice(0, 10)}`
+              : 'never delivered yet' }),
+          ]))),
+          el('div', { class: 'knaprad' }, [
+            el('button', { class: 'btn primary', text: 'Send a test notification',
+              onclick: (e) => proevNotifikation(e.target) }),
+            el('button', { class: 'btn ghost', text: 'Turn off on this device',
+              onclick: (e) => afmeld(e.target) }),
+          ]),
+        ])
+      : el('button', {
+          class: 'btn primary', text: 'Turn on notifications',
+          disabled: tilladelse === 'denied',
+          onclick: (e) => tilmeld(e.target),
+        }),
+
+    n.fejl ? el('p', { class: 'noeglestatus mangler', text: n.fejl }) : null,
+  ]);
+}
+
+/** base64url -> Uint8Array. PushManager vil have raa bytes, ikke en streng. */
+function b64uTilBytes(s) {
+  const pad = '='.repeat((4 - (s.length % 4)) % 4);
+  const b = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(b, (c) => c.charCodeAt(0));
+}
+
+async function tilmeld(knap) {
+  knap.disabled = true;
+  state.push.fejl = '';
+  try {
+    const tilladelse = await Notification.requestPermission();
+    if (tilladelse !== 'granted') {
+      state.push.fejl = tilladelse === 'denied'
+        ? 'You said no. The browser will not ask again — allow it in the site settings.'
+        : 'No answer to the permission request.';
+      tegnSide();
+      return;
+    }
+    const reg = await navigator.serviceWorker.ready;
+    const { key } = await api('/push');
+    const abon = await reg.pushManager.subscribe({
+      // userVisibleOnly er PAAKRAEVET i Chrome: man maa ikke abonnere paa
+      // push uden at vise brugeren noget.
+      userVisibleOnly: true,
+      applicationServerKey: b64uTilBytes(key),
+    });
+    const j = abon.toJSON();
+    await api('/push/subscribe', { method: 'POST', body: {
+      endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
+    } });
+    await hentPush();
+    tegnSide();
+    toast('Notifications are on.');
+  } catch (err) {
+    state.push.fejl = err.message;
+    tegnSide();
+  }
+}
+
+async function afmeld(knap) {
+  knap.disabled = true;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const abon = await reg.pushManager.getSubscription();
+    if (abon) {
+      await api('/push/unsubscribe', { method: 'POST', body: { endpoint: abon.endpoint } });
+      await abon.unsubscribe();
+    }
+    await hentPush();
+    tegnSide();
+    toast('Notifications off on this device.');
+  } catch (err) { toast(err.message, 'fejl'); knap.disabled = false; }
+}
+
+async function proevNotifikation(knap) {
+  knap.disabled = true;
+  const gammel = knap.textContent;
+  knap.textContent = 'Sending…';
+  try {
+    const r = await api('/push/test', { method: 'POST' });
+    toast(r.sendt
+      ? `Sent to ${r.sendt} device${r.sendt === 1 ? '' : 's'}.`
+        + (r.doede ? ` ${r.doede} stale one${r.doede === 1 ? '' : 's'} removed.` : '')
+      : 'The push service accepted nothing — see the server log.', r.sendt ? '' : 'fejl');
+    await hentPush();
+    tegnSide();
+  } catch (err) { toast(err.message, 'fejl'); }
+  knap.disabled = false;
+  knap.textContent = gammel;
+}
+
+async function hentPush() {
+  try {
+    const r = await api('/push');
+    state.push.abon = r.subscriptions || [];
+    state.push.noegle = r.key;
+  } catch { state.push.abon = []; }
 }
