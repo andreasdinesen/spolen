@@ -46,12 +46,87 @@ function titelSide() {
         p ? el('div', { class: 'dim lille',
           text: `${p.sete} of ${p.sendte} aired episodes watched` }) : null,
         el('p', { text: titel.overview || '' }),
+        // En FILM har ingen afsnit at markere - den skal have sin egen knap.
+        titel.kind === 'movie' ? filmSet(t.data) : null,
         udbudsAfsnit(t.data),
       ]),
     ]),
     samlingsAfsnit(t.data),
     beslaegtedeAfsnit(),
     t.data.episodes ? saesonListe(t.data.episodes, titel.id) : null,
+  ]);
+}
+
+/*
+ * "Set" for en FILM.
+ *
+ * En serie markeres afsnit for afsnit, og det er hele saesonlisten til for.
+ * En film har ingen afsnit, og indtil nu havde den derfor slet ingen vej til
+ * at blive markeret set - biblioteket skrev "Not watched", og der var intet
+ * at goere ved det (Andreas, 2026-08-29).
+ *
+ * Serveren sendte allerede `watched` med hver film; fladen tegnede den bare
+ * aldrig.
+ *
+ * En film kan ses FLERE gange, og det er ikke det samme som at have set den:
+ * derfor en liste over gangene og ikke bare et flueben.
+ */
+function filmSet(d) {
+  const set = d.watched || [];
+  const knap = el('button', {
+    class: set.length ? 'btn ghost lille' : 'btn primary',
+    text: set.length ? 'Watch again' : 'Mark as watched',
+    onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        const svar = await api('/watches', { method: 'POST',
+          body: { titleId: d.title.id, source: 'manual' } });
+        /*
+         * Dubletnoeglen er pr. DAG, ikke pr. sekund - saa en import kan
+         * koeres igen uden at fordoble historikken (se ix_watch_dedup).
+         * Foelgen er, at et gensyn SAMME dag ikke bliver til en ny gang.
+         * Uden den her besked trykker man paa en knap, der tier stille, og
+         * tror at den er i stykker (2026-08-29).
+         */
+        if (svar && svar.dublet) toast('Already recorded for today.');
+        await aabnTitel(d.title.id);
+      } catch (err) {
+        e.target.disabled = false;
+        toast(err.message, 'fejl');
+      }
+    },
+  });
+
+  return el('div', { class: 'filmset' }, [
+    knap,
+    set.length
+      ? el('div', { class: 'dim lille', text: set.length === 1
+          ? 'Seen once.' : `Seen ${set.length} times.` })
+      : null,
+    /*
+     * Hver gang staar for sig med sin egen dato, saa man kan fjerne PRAECIS
+     * den, der blev sat ved en fejl. En samlet "fjern alle" ville ogsaa slette
+     * de rigtige (2026-08-29).
+     */
+    set.length ? el('div', { class: 'liste' }, set.map((w) => el('div', { class: 'item-row' }, [
+      el('span', { class: 'lille', text: w.watchedAt
+        ? new Date(w.watchedAt * 1000).toLocaleDateString('en-GB',
+            { day: 'numeric', month: 'short', year: 'numeric' })
+        : 'no date' }),
+      el('span', { class: 'dim lille', text: w.source || 'manual' }),
+      el('button', { class: 'btn ghost lille', text: 'Remove',
+        title: 'Remove just this viewing',
+        onclick: async (e) => {
+          e.target.disabled = true;
+          try {
+            await api(`/watches/${encodeURIComponent(w.id)}`, { method: 'DELETE' });
+            await aabnTitel(d.title.id);
+          } catch (err) {
+            e.target.disabled = false;
+            toast(err.message, 'fejl');
+          }
+        } }),
+    ]))) : null,
   ]);
 }
 
@@ -377,8 +452,33 @@ function samlingsAfsnit(d) {
   return el('section', { class: 'samling' }, [
     el('h2', { text: c.name }),
     el('p', { class: usete.length ? 'chip klar' : 'dim', text: besked }),
+    /*
+     * Hele kortet kan klikkes - ikke kun knappen.
+     *
+     * Man peger paa plakaten, fordi det er den, man kan se. En knap, der
+     * hedder "Open" nede i hjoernet, er ikke der, oejet gaar hen
+     * (Andreas, 2026-08-29). Reglen for HVAD et klik goer er den samme som
+     * i soegningen: har man titlen, aabnes dens side; ellers vises
+     * overblikket foerst.
+     */
     el('div', { class: 'plakater' }, c.dele.map((del) => el('div', {
       class: `soegekort${del.denne ? ' denne' : ''}`,
+      role: del.denne ? null : 'button',
+      tabindex: del.denne ? null : '0',
+      // Ingen vej fra den, man staar paa, til sig selv.
+      onclick: del.denne ? null : () => aabnTraeffer({
+        id: del.id, kind: 'movie', tmdbId: del.tmdbId, name: del.name,
+        year: del.year, posterPath: del.posterPath, tracked: !!del.iBiblioteket,
+      }),
+      onkeydown: del.denne ? null : (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          aabnTraeffer({
+            id: del.id, kind: 'movie', tmdbId: del.tmdbId, name: del.name,
+            year: del.year, posterPath: del.posterPath, tracked: !!del.iBiblioteket,
+          });
+        }
+      },
     }, [
       del.posterPath
         ? el('img', { class: 'plakat', src: `/api/poster/w342${del.posterPath}`,
@@ -391,13 +491,19 @@ function samlingsAfsnit(d) {
       ].filter(Boolean).join(' · ') }),
       // Ingen knap paa den, man staar paa - og ingen paa dem, man allerede
       // har. Kun det, der er noget at goere ved.
+      /*
+       * stopPropagation: knappen ligger INDE i et kort, der ogsaa kan
+       * klikkes. Uden den ville et tryk paa Add baade tilfoeje OG navigere
+       * vaek fra siden, saa man aldrig saa at det lykkedes.
+       */
       (!del.denne && !del.iBiblioteket)
         ? el('button', { class: 'btn primary lille', text: 'Add',
-            onclick: (e) => tilfoej({ kind: 'movie', tmdbId: del.tmdbId, name: del.name }, e.target) })
+            onclick: (e) => { e.stopPropagation();
+              tilfoej({ kind: 'movie', tmdbId: del.tmdbId, name: del.name }, e.target); } })
         : null,
       (!del.denne && del.iBiblioteket)
         ? el('button', { class: 'btn ghost lille', text: 'Open',
-            onclick: () => aabnTitel(del.id) })
+            onclick: (e) => { e.stopPropagation(); aabnTitel(del.id); } })
         : null,
     ]))),
   ]);
@@ -422,7 +528,11 @@ function beslaegtedeAfsnit() {
   if (!b.length) return el('p', { class: 'dim lille', text: 'TMDB has nothing related.' });
   return el('section', {}, [
     el('h2', { text: 'Related' }),
-    el('div', { class: 'plakater' }, b.map((r) => el('div', { class: 'soegekort' }, [
+    el('div', { class: 'plakater' }, b.map((r) => el('div', {
+      class: 'soegekort', role: 'button', tabindex: '0',
+      onclick: () => aabnTraeffer(r),
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); aabnTraeffer(r); } },
+    }, [
       r.poster
         ? el('img', { class: 'plakat', src: r.poster, alt: '', loading: 'lazy' })
         : el('div', { class: 'plakat' }),
@@ -431,9 +541,9 @@ function beslaegtedeAfsnit() {
         + `${r.year ? ' · ' + r.year : ''}` }),
       r.tracked
         ? el('button', { class: 'btn ghost lille', text: 'Open',
-            onclick: () => aabnTitel(r.id) })
+            onclick: (e) => { e.stopPropagation(); aabnTitel(r.id); } })
         : el('button', { class: 'btn primary lille', text: 'Add',
-            onclick: (e) => tilfoej(r, e.target) }),
+            onclick: (e) => { e.stopPropagation(); tilfoej(r, e.target); } }),
     ]))),
   ]);
 }

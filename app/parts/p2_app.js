@@ -42,6 +42,12 @@ const IKONER = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 3.5v2M12 18.5v2M20.5 12h-2M5.5 12h-2M17.8 6.2l-1.4 1.4M7.6 16.4l-1.4 1.4M17.8 17.8l-1.4-1.4M7.6 7.6L6.2 6.2"/>',
   moon: '<path d="M20 14.6A8.6 8.6 0 019.4 4 8.6 8.6 0 1020 14.6z"/>',
   out: '<path d="M14.5 4.5H18a1.5 1.5 0 011.5 1.5v12a1.5 1.5 0 01-1.5 1.5h-3.5"/><path d="M4.5 12h10M11 8.5l3.5 3.5-3.5 3.5"/>',
+  // Pil op - tilbage til toppen.
+  op: '<path d="M12 19V6M6.5 11.5L12 6l5.5 5.5"/>',
+  // Fire linjer: den taette liste.
+  taet: '<path d="M4 6h16M4 10h16M4 14h16M4 18h16"/>',
+  // Gitter: plakaterne igen.
+  gitter: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
 };
 
 /*
@@ -178,7 +184,150 @@ function skal(indhold) {
     indhold,
   ]));
   if (beholdTop) tegnOmniPanel();
+  /*
+   * Knappen i sidehovedet bygges tom og faar sit ikon og sin tekst HER.
+   * Den tegnes om ved hver gentegning, saa den kan ikke selv huske, hvilken
+   * vej den peger.
+   */
+  opdaterKompaktKnapper();
   sc.scrollTop = gemtRul;
+}
+
+/* ------------------------------------------- kompakt visning + flydere */
+
+/*
+ * Kompakt er en SKAERM-praeference, ikke en kontoindstilling.
+ *
+ * Den hoerer til den skaerm, man sidder ved: en telefon vil gerne have den
+ * taette liste, en stor skaerm hellere plakaterne. Derfor localStorage og
+ * ikke serveren - samme valg som Bogreolen (Andreas, 2026-08-29).
+ */
+function erKompakt() {
+  try { return localStorage.getItem('spolen_kompakt') === '1'; } catch { return false; }
+}
+
+function saetKompakt(til) {
+  try { localStorage.setItem('spolen_kompakt', til ? '1' : '0'); } catch { /* privat tilstand */ }
+}
+
+/*
+ * Skift visning UDEN at tegne siden om.
+ *
+ * En gentegning ville rive plakaterne ned og hente dem igen - hundredvis af
+ * billeder, for en aendring der er én klasse. Rullepositionen ville ogsaa
+ * springe, og man ville miste det sted i listen, man stod.
+ */
+function skiftKompakt() {
+  const til = !erKompakt();
+  saetKompakt(til);
+  const gitter = document.querySelector('.plakater');
+  if (gitter) gitter.classList.toggle('kompakt', til);
+  opdaterKompaktKnapper();
+}
+
+/* Begge knapper viser det samme - de skal foelges ad, ogsaa naar man
+   trykker paa den ene. */
+function opdaterKompaktKnapper() {
+  const til = erKompakt();
+  for (const k of document.querySelectorAll('[data-kompakt]')) {
+    k.classList.toggle('til', til);
+    k.setAttribute('aria-pressed', til ? 'true' : 'false');
+    const t = til ? 'Show posters' : 'Compact list — more titles at once';
+    k.title = t;
+    k.setAttribute('aria-label', t);
+    const nytIkon = ikon(til ? IKONER.gitter : IKONER.taet, { stoerrelse: k.dataset.kompakt === 'flyder' ? 19 : 16 });
+    const gammelt = k.querySelector('svg');
+    if (gammelt) gammelt.replaceWith(nytIkon); else k.prepend(nytIkon);
+    const mrk = k.querySelector('.knaptekst');
+    if (mrk) mrk.textContent = til ? 'Posters' : 'Compact';
+  }
+}
+
+/* Knappen i toppen af biblioteket - den man finder, naar man ikke har
+   rullet endnu og flyderne derfor ikke er fremme. */
+function kompaktKnap() {
+  return el('button', {
+    class: 'btn ghost lille', 'data-kompakt': 'top',
+    onclick: skiftKompakt,
+  }, [el('span', { class: 'knaptekst', text: '' })]);
+}
+
+/*
+ * De to flydende knapper.
+ *
+ * De bygges ÉN gang og bliver liggende i <body> - ikke inde i siden, som
+ * tegnes om ved hver handling. Skifteren vises kun paa biblioteket, hvor
+ * der er noget at skifte; "til toppen" er nyttig paa enhver lang side.
+ */
+function tilslutFlydere() {
+  if (document.getElementById('tilToppen')) return;
+
+  const top = el('button', {
+    class: 'flydeknap', id: 'tilToppen', hidden: true,
+    title: 'Back to the top', 'aria-label': 'Back to the top',
+    /*
+     * Bloed rulning med KONTROL.
+     *
+     * En bloed rulning er en animation, og animationer kan blive droppet -
+     * maalt her og ved importen 2026-08-29: scrollY stod uroert efter et
+     * sekund. En knap, der hedder "til toppen" og ikke flytter noget, er
+     * vaerre end ingen knap, saa efter 700 ms springes der haardt.
+     *
+     * IKKE fokus i soegefeltet undervejs: paa en telefon ville tastaturet
+     * springe frem, og det er ikke det, man beder om.
+     */
+    onclick: () => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      setTimeout(() => { if (window.scrollY > 0) window.scrollTo(0, 0); }, 700);
+    },
+  }, [ikon(IKONER.op, { stoerrelse: 19 })]);
+
+  const komp = el('button', {
+    class: 'flydeknap kompaktknap', id: 'kompaktFlyder', hidden: true,
+    'data-kompakt': 'flyder',
+    onclick: skiftKompakt,
+  }, []);
+
+  document.body.appendChild(top);
+  document.body.appendChild(komp);
+  opdaterKompaktKnapper();
+
+  /*
+   * Kaldes DIREKTE paa hver rullehaendelse - som i Bogreolen.
+   *
+   * Foerste udgave droslede gennem requestAnimationFrame med et
+   * `venter`-flag, der blev nulstillet INDE i tilbagekaldet. Maalt: i en
+   * skjult fane fyrer rAF aldrig, og saa stod flaget paa true for evigt -
+   * hver eneste senere rulning blev ignoreret. En drosling, der kan
+   * gaa i baglaas, er vaerre end ingen drosling (2026-08-29).
+   *
+   * Arbejdet er ogsaa lille nok til at taale det: en laesning af scrollY og
+   * to klasseskift. Ingen getBoundingClientRect, altsaa ingen tvungen
+   * ombrydning.
+   */
+  const opdater = () => {
+    // 600px: langt nok nede til, at vejen tilbage er besvaerlig.
+    const vis = window.scrollY > 600;
+    // Skifteren hoerer kun hjemme, hvor der ER et gitter at skifte.
+    const harGitter = !!document.querySelector('.plakater');
+    for (const k of [top, komp]) {
+      if (vis && (k !== komp || harGitter)) {
+        if (k.hidden) {
+          k.hidden = false;
+          // Tving en ombrydning, saa skubbet har en starttilstand at gaa ud
+          // fra. Sker det ikke, staar knappen bare med det samme - den er
+          // synlig uanset, for opaciteten afhaenger ikke af overgangen.
+          void k.offsetHeight;
+        }
+        k.classList.add('vis');
+      } else {
+        k.classList.remove('vis');
+        k.hidden = true;
+      }
+    }
+  };
+  window.addEventListener('scroll', opdater, { passive: true });
+  opdater();
 }
 
 /*
@@ -543,6 +692,7 @@ async function indlaes() {
     tilslutNav();
     tilslutServiceWorker();
     tilslutSideDrop();
+    tilslutFlydere();
     // Serveren udleverer ogsaa sin egen version. Stemmer den ikke med den her
     // fil, sidder der en gammel app.js i cachen - og saa fejlsoeger man kode,
     // der ikke er indlaest (§5).

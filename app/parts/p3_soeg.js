@@ -329,13 +329,68 @@ async function tilfoej(r, knap) {
 /* ------------------------------------------------------------ bibliotek */
 
 function bibliotekSide() {
-  const raekker = state.bibliotek.raekker;
-  if (!raekker.length) {
+  const alle = state.bibliotek.raekker;
+  if (!alle.length) {
     return tomtRum('Your library is empty', 'Search at the top and add a film or series.');
   }
-  return el('div', {}, [
-    el('h1', { text: 'Library' }),
-    el('div', { class: 'plakater' }, raekker.map(bibliotekKort)),
+
+  /*
+   * Film og serier hver for sig.
+   *
+   * De to er ikke det samme at lede efter: en serie har fremdrift og et
+   * naeste afsnit, en film er set eller ikke set (Andreas, 2026-08-29).
+   *
+   * Valget lever i state og ikke i localStorage - modsat kompakt. Et FILTER,
+   * der huskes paa tvaers af besoeg, er den slags, hvor man aabner
+   * biblioteket, ser halvdelen af sine titler og tror, resten er vaek.
+   */
+  const valgt = state.bibliotek.slags || 'alle';
+  const antal = {
+    alle: alle.length,
+    movie: alle.filter((r) => r.title.kind === 'movie').length,
+    tv: alle.filter((r) => r.title.kind === 'tv').length,
+  };
+  const raekker = valgt === 'alle' ? alle : alle.filter((r) => r.title.kind === valgt);
+
+  const flig = (id, navn) => el('button', {
+    class: `chip${valgt === id ? ' valgt' : ''}`,
+    'aria-pressed': valgt === id ? 'true' : 'false',
+    text: `${navn} ${antal[id]}`,
+    onclick: () => { state.bibliotek.slags = id; tegnSide(); },
+  });
+
+  /* Kun de flige, der HAR noget. Har man ingen serier, er en tom
+     "Series 0" bare stoej. */
+  const flige = [flig('alle', 'All')];
+  if (antal.movie) flige.push(flig('movie', 'Films'));
+  if (antal.tv) flige.push(flig('tv', 'Series'));
+  /*
+   * Overskrift og skifter deler linje. Knappen staar HER og ikke kun som
+   * flyder, fordi flyderne foerst dukker op, naar man har rullet - og man
+   * skal kunne vaelge visning, foer man goer det (Andreas, 2026-08-29).
+   */
+  const gitter = el('div', { class: `plakater${erKompakt() ? ' kompakt' : ''}` },
+    raekker.map(bibliotekKort));
+
+  /*
+   * `bredside`: fyld den plads, der ER.
+   *
+   * .main er en kolonne-flexboks med `align-items: center`, saa et barn UDEN
+   * bredde krymper til sit eget indhold - maalt: 407px inde i en main paa
+   * 1016px, og et auto-fill-gitter faldt derfor til to soejler paa en bred
+   * skaerm. Med rigtige plakater sloerer billedernes egen bredde det, men
+   * gitteret faar aldrig den fulde plads (2026-08-29).
+   */
+  return el('div', { class: 'bredside' }, [
+    el('div', { class: 'sidehoved' }, [
+      el('h1', { text: 'Library' }),
+      el('span', { class: 'dim lille', text: raekker.length === 1 ? '1 title' : `${raekker.length} titles` }),
+      kompaktKnap(),
+    ]),
+    flige.length > 1 ? el('div', { class: 'omni-chips bibliotekflige' }, flige) : null,
+    raekker.length
+      ? gitter
+      : el('p', { class: 'dim', text: 'Nothing of that kind yet.' }),
   ]);
 }
 

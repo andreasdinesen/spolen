@@ -2613,3 +2613,172 @@ button.version-linje.gammel:hover { text-decoration: underline; }
 .foldindhold { padding-bottom: 20px; }
 /* Overskrifter INDE i et foldet afsnit skal ikke konkurrere med det. */
 .foldindhold h2 { font-size: 1rem; margin-top: 18px; }
+
+/* --------------------------------------------------- kompakt bibliotek */
+
+/*
+ * Kompakt visning: flere titler paa skaermen ad gangen.
+ *
+ * Samme greb som i Bogreolen (Andreas, 2026-08-29). Plakaten er dejlig at
+ * kigge paa og haabloes at LEDE i - med 648 titler bliver et plakatgitter
+ * til meget rulning. Kompakt slaar plakaten fra og lader titel og status
+ * dele én linje, saa der er plads til mange flere.
+ *
+ * Det er en ren skaerm-praeference: den gemmes i localStorage, ikke paa
+ * serveren, fordi den hoerer til DEN skaerm, man sidder ved - ikke til
+ * kontoen. Samme grund som Bogreolens.
+ */
+.plakater.kompakt {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 2px 18px;
+}
+
+.plakater.kompakt .plakat,
+.plakater.kompakt .fremdrift { display: none; }
+
+.plakater.kompakt .soegekort {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: var(--r-sm);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.plakater.kompakt .soegekort:hover { background: var(--card-hover); }
+
+/* Titlen faar pladsen; status klemmes sammen foerst. Begge klippes med
+   ellipse, saa en lang titel ikke braekker linjen og oedelaegger taetheden. */
+.plakater.kompakt .soegekort-titel {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plakater.kompakt .soegekort .lille {
+  flex: none;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+/* Uden plakat er der ingen ramme at markere paa. */
+.plakater.kompakt .soegekort.denne { background: var(--accent-soft); }
+
+/* ------------------------------------------------- flydende knapper */
+
+/*
+ * Til toppen, og skift af visning.
+ *
+ * De dukker foerst op, naar man er rullet et stykke ned - deroppe er de
+ * unoedvendige, og en knap, der altid ligger og daekker indholdet, er i
+ * vejen. `hidden` fjernes FOER klassen saettes, saa overgangen kan naa at
+ * koere; ellers springer knappen frem uden.
+ */
+.flydeknap {
+  position: fixed;
+  right: 14px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 35;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  box-shadow: var(--shadow-lift);
+  cursor: pointer;
+  /*
+   * INGEN opacitets-overgang.
+   *
+   * Knappen skal vaere synlig, saa snart den ikke er `hidden` - synligheden
+   * maa ikke afhaenge af, at en animation naar at koere. Maalt 2026-08-29:
+   * i en fane, der ikke tegnes, gaar en opacitets-overgang i staa ved
+   * STARTvaerdien, saa knappen stod tilbage paa opacity 0 - til stede,
+   * usynlig og umulig at forklare.
+   *
+   * Tilbage er et lille skub, som er ren pynt: gaar DEN i staa, staar
+   * knappen 8px for lavt og virker stadig.
+   */
+  transform: translateY(8px);
+  transition: transform .15s;
+}
+
+.flydeknap.vis { transform: none; }
+.flydeknap:hover { background: var(--card-hover); }
+.flydeknap.til { background: var(--accent); color: #fff; border-color: var(--accent); }
+:root[data-theme="dark"] .flydeknap.til { color: #1a1512; }
+
+/* Skifteren staar ved siden af - én knapbredde plus luft. */
+.flydeknap.kompaktknap { right: 66px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .flydeknap { transition: none; }
+}
+
+/* Overskrift, antal og skifter paa én linje. Knappen skubbes helt ud til
+   hoejre; paa en smal skaerm bryder raekken i stedet for at klemme titlen. */
+.sidehoved {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 14px;
+}
+.sidehoved h1 { margin: 0; }
+.sidehoved .btn { margin-left: auto; align-self: center; }
+.sidehoved .btn .knaptekst { margin-left: 6px; }
+.sidehoved .btn svg { vertical-align: -3px; }
+
+/* "Set"-blokken paa en films side. Knappen og listen over gangene hoerer
+   sammen, saa de har deres eget rum mellem resumeet og udbuddet. */
+.filmset { margin: 14px 0 18px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.filmset .liste { width: 100%; max-width: 420px; }
+
+/* -------------------------------------------- film/serier i biblioteket */
+
+/*
+ * Fligene ser ud som dodas kontekstflige: en rolig pille, der bliver
+ * fremhaevet, naar den er valgt.
+ *
+ * `text-decoration: none` er ikke pynt: `button.chip:not(.flat):hover` saetter
+ * en GENNEMSTREGNING - den hoerer til de flige, man kan FJERNE (en tildeling,
+ * en etiket). Her ville den love, at et klik sletter noget.
+ */
+.bibliotekflige {
+  justify-content: flex-start;
+  padding: 0 0 4px;
+  margin-bottom: 14px;
+  gap: 8px;
+}
+
+.bibliotekflige .chip {
+  background: var(--card);
+  color: var(--muted);
+  border: 1px solid var(--border-soft);
+  padding: 5px 13px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.bibliotekflige .chip:hover {
+  text-decoration: none;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.bibliotekflige .chip.valgt {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-color: transparent;
+}
+
+.bibliotekflige .chip.valgt:hover { color: var(--accent-text); }
+
+/* Sider, der skal bruge hele bredden. .main centrerer sine boern
+   (align-items: center), saa uden det her krymper indholdet til sig selv. */
+.bredside { width: 100%; }

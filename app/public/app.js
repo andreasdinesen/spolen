@@ -122,7 +122,7 @@ if (typeof module !== 'undefined' && module.exports) {
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 14;
+const APP_VERSION = 15;
 
 /* ---------------------------------------------------------------- tema */
 
@@ -178,7 +178,7 @@ const state = {
   // at noget andet ser forkert ud. En starttilstand skal have ALLE de felter,
   // fladen laeser, ogsaa dem der altid fyldes af et svar.
   soeg: { q: '', lokale: [], resultater: [], arbejder: false, fejl: '' },
-  bibliotek: { raekker: [] },
+  bibliotek: { raekker: [], slags: 'alle' },
   titel: { id: null, data: null, fejl: '' },
   kalender: { hentet: false, fejl: '', raekker: [], idag: '', fra: '', til: '', icalPath: null },
   import: { tekst: '', analyse: null, status: null, fejl: '', dateOrder: null },
@@ -371,6 +371,12 @@ const IKONER = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 3.5v2M12 18.5v2M20.5 12h-2M5.5 12h-2M17.8 6.2l-1.4 1.4M7.6 16.4l-1.4 1.4M17.8 17.8l-1.4-1.4M7.6 7.6L6.2 6.2"/>',
   moon: '<path d="M20 14.6A8.6 8.6 0 019.4 4 8.6 8.6 0 1020 14.6z"/>',
   out: '<path d="M14.5 4.5H18a1.5 1.5 0 011.5 1.5v12a1.5 1.5 0 01-1.5 1.5h-3.5"/><path d="M4.5 12h10M11 8.5l3.5 3.5-3.5 3.5"/>',
+  // Pil op - tilbage til toppen.
+  op: '<path d="M12 19V6M6.5 11.5L12 6l5.5 5.5"/>',
+  // Fire linjer: den taette liste.
+  taet: '<path d="M4 6h16M4 10h16M4 14h16M4 18h16"/>',
+  // Gitter: plakaterne igen.
+  gitter: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
 };
 
 /*
@@ -507,7 +513,150 @@ function skal(indhold) {
     indhold,
   ]));
   if (beholdTop) tegnOmniPanel();
+  /*
+   * Knappen i sidehovedet bygges tom og faar sit ikon og sin tekst HER.
+   * Den tegnes om ved hver gentegning, saa den kan ikke selv huske, hvilken
+   * vej den peger.
+   */
+  opdaterKompaktKnapper();
   sc.scrollTop = gemtRul;
+}
+
+/* ------------------------------------------- kompakt visning + flydere */
+
+/*
+ * Kompakt er en SKAERM-praeference, ikke en kontoindstilling.
+ *
+ * Den hoerer til den skaerm, man sidder ved: en telefon vil gerne have den
+ * taette liste, en stor skaerm hellere plakaterne. Derfor localStorage og
+ * ikke serveren - samme valg som Bogreolen (Andreas, 2026-08-29).
+ */
+function erKompakt() {
+  try { return localStorage.getItem('spolen_kompakt') === '1'; } catch { return false; }
+}
+
+function saetKompakt(til) {
+  try { localStorage.setItem('spolen_kompakt', til ? '1' : '0'); } catch { /* privat tilstand */ }
+}
+
+/*
+ * Skift visning UDEN at tegne siden om.
+ *
+ * En gentegning ville rive plakaterne ned og hente dem igen - hundredvis af
+ * billeder, for en aendring der er én klasse. Rullepositionen ville ogsaa
+ * springe, og man ville miste det sted i listen, man stod.
+ */
+function skiftKompakt() {
+  const til = !erKompakt();
+  saetKompakt(til);
+  const gitter = document.querySelector('.plakater');
+  if (gitter) gitter.classList.toggle('kompakt', til);
+  opdaterKompaktKnapper();
+}
+
+/* Begge knapper viser det samme - de skal foelges ad, ogsaa naar man
+   trykker paa den ene. */
+function opdaterKompaktKnapper() {
+  const til = erKompakt();
+  for (const k of document.querySelectorAll('[data-kompakt]')) {
+    k.classList.toggle('til', til);
+    k.setAttribute('aria-pressed', til ? 'true' : 'false');
+    const t = til ? 'Show posters' : 'Compact list — more titles at once';
+    k.title = t;
+    k.setAttribute('aria-label', t);
+    const nytIkon = ikon(til ? IKONER.gitter : IKONER.taet, { stoerrelse: k.dataset.kompakt === 'flyder' ? 19 : 16 });
+    const gammelt = k.querySelector('svg');
+    if (gammelt) gammelt.replaceWith(nytIkon); else k.prepend(nytIkon);
+    const mrk = k.querySelector('.knaptekst');
+    if (mrk) mrk.textContent = til ? 'Posters' : 'Compact';
+  }
+}
+
+/* Knappen i toppen af biblioteket - den man finder, naar man ikke har
+   rullet endnu og flyderne derfor ikke er fremme. */
+function kompaktKnap() {
+  return el('button', {
+    class: 'btn ghost lille', 'data-kompakt': 'top',
+    onclick: skiftKompakt,
+  }, [el('span', { class: 'knaptekst', text: '' })]);
+}
+
+/*
+ * De to flydende knapper.
+ *
+ * De bygges ÉN gang og bliver liggende i <body> - ikke inde i siden, som
+ * tegnes om ved hver handling. Skifteren vises kun paa biblioteket, hvor
+ * der er noget at skifte; "til toppen" er nyttig paa enhver lang side.
+ */
+function tilslutFlydere() {
+  if (document.getElementById('tilToppen')) return;
+
+  const top = el('button', {
+    class: 'flydeknap', id: 'tilToppen', hidden: true,
+    title: 'Back to the top', 'aria-label': 'Back to the top',
+    /*
+     * Bloed rulning med KONTROL.
+     *
+     * En bloed rulning er en animation, og animationer kan blive droppet -
+     * maalt her og ved importen 2026-08-29: scrollY stod uroert efter et
+     * sekund. En knap, der hedder "til toppen" og ikke flytter noget, er
+     * vaerre end ingen knap, saa efter 700 ms springes der haardt.
+     *
+     * IKKE fokus i soegefeltet undervejs: paa en telefon ville tastaturet
+     * springe frem, og det er ikke det, man beder om.
+     */
+    onclick: () => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      setTimeout(() => { if (window.scrollY > 0) window.scrollTo(0, 0); }, 700);
+    },
+  }, [ikon(IKONER.op, { stoerrelse: 19 })]);
+
+  const komp = el('button', {
+    class: 'flydeknap kompaktknap', id: 'kompaktFlyder', hidden: true,
+    'data-kompakt': 'flyder',
+    onclick: skiftKompakt,
+  }, []);
+
+  document.body.appendChild(top);
+  document.body.appendChild(komp);
+  opdaterKompaktKnapper();
+
+  /*
+   * Kaldes DIREKTE paa hver rullehaendelse - som i Bogreolen.
+   *
+   * Foerste udgave droslede gennem requestAnimationFrame med et
+   * `venter`-flag, der blev nulstillet INDE i tilbagekaldet. Maalt: i en
+   * skjult fane fyrer rAF aldrig, og saa stod flaget paa true for evigt -
+   * hver eneste senere rulning blev ignoreret. En drosling, der kan
+   * gaa i baglaas, er vaerre end ingen drosling (2026-08-29).
+   *
+   * Arbejdet er ogsaa lille nok til at taale det: en laesning af scrollY og
+   * to klasseskift. Ingen getBoundingClientRect, altsaa ingen tvungen
+   * ombrydning.
+   */
+  const opdater = () => {
+    // 600px: langt nok nede til, at vejen tilbage er besvaerlig.
+    const vis = window.scrollY > 600;
+    // Skifteren hoerer kun hjemme, hvor der ER et gitter at skifte.
+    const harGitter = !!document.querySelector('.plakater');
+    for (const k of [top, komp]) {
+      if (vis && (k !== komp || harGitter)) {
+        if (k.hidden) {
+          k.hidden = false;
+          // Tving en ombrydning, saa skubbet har en starttilstand at gaa ud
+          // fra. Sker det ikke, staar knappen bare med det samme - den er
+          // synlig uanset, for opaciteten afhaenger ikke af overgangen.
+          void k.offsetHeight;
+        }
+        k.classList.add('vis');
+      } else {
+        k.classList.remove('vis');
+        k.hidden = true;
+      }
+    }
+  };
+  window.addEventListener('scroll', opdater, { passive: true });
+  opdater();
 }
 
 /*
@@ -872,6 +1021,7 @@ async function indlaes() {
     tilslutNav();
     tilslutServiceWorker();
     tilslutSideDrop();
+    tilslutFlydere();
     // Serveren udleverer ogsaa sin egen version. Stemmer den ikke med den her
     // fil, sidder der en gammel app.js i cachen - og saa fejlsoeger man kode,
     // der ikke er indlaest (§5).
@@ -1236,13 +1386,68 @@ async function tilfoej(r, knap) {
 /* ------------------------------------------------------------ bibliotek */
 
 function bibliotekSide() {
-  const raekker = state.bibliotek.raekker;
-  if (!raekker.length) {
+  const alle = state.bibliotek.raekker;
+  if (!alle.length) {
     return tomtRum('Your library is empty', 'Search at the top and add a film or series.');
   }
-  return el('div', {}, [
-    el('h1', { text: 'Library' }),
-    el('div', { class: 'plakater' }, raekker.map(bibliotekKort)),
+
+  /*
+   * Film og serier hver for sig.
+   *
+   * De to er ikke det samme at lede efter: en serie har fremdrift og et
+   * naeste afsnit, en film er set eller ikke set (Andreas, 2026-08-29).
+   *
+   * Valget lever i state og ikke i localStorage - modsat kompakt. Et FILTER,
+   * der huskes paa tvaers af besoeg, er den slags, hvor man aabner
+   * biblioteket, ser halvdelen af sine titler og tror, resten er vaek.
+   */
+  const valgt = state.bibliotek.slags || 'alle';
+  const antal = {
+    alle: alle.length,
+    movie: alle.filter((r) => r.title.kind === 'movie').length,
+    tv: alle.filter((r) => r.title.kind === 'tv').length,
+  };
+  const raekker = valgt === 'alle' ? alle : alle.filter((r) => r.title.kind === valgt);
+
+  const flig = (id, navn) => el('button', {
+    class: `chip${valgt === id ? ' valgt' : ''}`,
+    'aria-pressed': valgt === id ? 'true' : 'false',
+    text: `${navn} ${antal[id]}`,
+    onclick: () => { state.bibliotek.slags = id; tegnSide(); },
+  });
+
+  /* Kun de flige, der HAR noget. Har man ingen serier, er en tom
+     "Series 0" bare stoej. */
+  const flige = [flig('alle', 'All')];
+  if (antal.movie) flige.push(flig('movie', 'Films'));
+  if (antal.tv) flige.push(flig('tv', 'Series'));
+  /*
+   * Overskrift og skifter deler linje. Knappen staar HER og ikke kun som
+   * flyder, fordi flyderne foerst dukker op, naar man har rullet - og man
+   * skal kunne vaelge visning, foer man goer det (Andreas, 2026-08-29).
+   */
+  const gitter = el('div', { class: `plakater${erKompakt() ? ' kompakt' : ''}` },
+    raekker.map(bibliotekKort));
+
+  /*
+   * `bredside`: fyld den plads, der ER.
+   *
+   * .main er en kolonne-flexboks med `align-items: center`, saa et barn UDEN
+   * bredde krymper til sit eget indhold - maalt: 407px inde i en main paa
+   * 1016px, og et auto-fill-gitter faldt derfor til to soejler paa en bred
+   * skaerm. Med rigtige plakater sloerer billedernes egen bredde det, men
+   * gitteret faar aldrig den fulde plads (2026-08-29).
+   */
+  return el('div', { class: 'bredside' }, [
+    el('div', { class: 'sidehoved' }, [
+      el('h1', { text: 'Library' }),
+      el('span', { class: 'dim lille', text: raekker.length === 1 ? '1 title' : `${raekker.length} titles` }),
+      kompaktKnap(),
+    ]),
+    flige.length > 1 ? el('div', { class: 'omni-chips bibliotekflige' }, flige) : null,
+    raekker.length
+      ? gitter
+      : el('p', { class: 'dim', text: 'Nothing of that kind yet.' }),
   ]);
 }
 
@@ -1539,12 +1744,87 @@ function titelSide() {
         p ? el('div', { class: 'dim lille',
           text: `${p.sete} of ${p.sendte} aired episodes watched` }) : null,
         el('p', { text: titel.overview || '' }),
+        // En FILM har ingen afsnit at markere - den skal have sin egen knap.
+        titel.kind === 'movie' ? filmSet(t.data) : null,
         udbudsAfsnit(t.data),
       ]),
     ]),
     samlingsAfsnit(t.data),
     beslaegtedeAfsnit(),
     t.data.episodes ? saesonListe(t.data.episodes, titel.id) : null,
+  ]);
+}
+
+/*
+ * "Set" for en FILM.
+ *
+ * En serie markeres afsnit for afsnit, og det er hele saesonlisten til for.
+ * En film har ingen afsnit, og indtil nu havde den derfor slet ingen vej til
+ * at blive markeret set - biblioteket skrev "Not watched", og der var intet
+ * at goere ved det (Andreas, 2026-08-29).
+ *
+ * Serveren sendte allerede `watched` med hver film; fladen tegnede den bare
+ * aldrig.
+ *
+ * En film kan ses FLERE gange, og det er ikke det samme som at have set den:
+ * derfor en liste over gangene og ikke bare et flueben.
+ */
+function filmSet(d) {
+  const set = d.watched || [];
+  const knap = el('button', {
+    class: set.length ? 'btn ghost lille' : 'btn primary',
+    text: set.length ? 'Watch again' : 'Mark as watched',
+    onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        const svar = await api('/watches', { method: 'POST',
+          body: { titleId: d.title.id, source: 'manual' } });
+        /*
+         * Dubletnoeglen er pr. DAG, ikke pr. sekund - saa en import kan
+         * koeres igen uden at fordoble historikken (se ix_watch_dedup).
+         * Foelgen er, at et gensyn SAMME dag ikke bliver til en ny gang.
+         * Uden den her besked trykker man paa en knap, der tier stille, og
+         * tror at den er i stykker (2026-08-29).
+         */
+        if (svar && svar.dublet) toast('Already recorded for today.');
+        await aabnTitel(d.title.id);
+      } catch (err) {
+        e.target.disabled = false;
+        toast(err.message, 'fejl');
+      }
+    },
+  });
+
+  return el('div', { class: 'filmset' }, [
+    knap,
+    set.length
+      ? el('div', { class: 'dim lille', text: set.length === 1
+          ? 'Seen once.' : `Seen ${set.length} times.` })
+      : null,
+    /*
+     * Hver gang staar for sig med sin egen dato, saa man kan fjerne PRAECIS
+     * den, der blev sat ved en fejl. En samlet "fjern alle" ville ogsaa slette
+     * de rigtige (2026-08-29).
+     */
+    set.length ? el('div', { class: 'liste' }, set.map((w) => el('div', { class: 'item-row' }, [
+      el('span', { class: 'lille', text: w.watchedAt
+        ? new Date(w.watchedAt * 1000).toLocaleDateString('en-GB',
+            { day: 'numeric', month: 'short', year: 'numeric' })
+        : 'no date' }),
+      el('span', { class: 'dim lille', text: w.source || 'manual' }),
+      el('button', { class: 'btn ghost lille', text: 'Remove',
+        title: 'Remove just this viewing',
+        onclick: async (e) => {
+          e.target.disabled = true;
+          try {
+            await api(`/watches/${encodeURIComponent(w.id)}`, { method: 'DELETE' });
+            await aabnTitel(d.title.id);
+          } catch (err) {
+            e.target.disabled = false;
+            toast(err.message, 'fejl');
+          }
+        } }),
+    ]))) : null,
   ]);
 }
 
@@ -1870,8 +2150,33 @@ function samlingsAfsnit(d) {
   return el('section', { class: 'samling' }, [
     el('h2', { text: c.name }),
     el('p', { class: usete.length ? 'chip klar' : 'dim', text: besked }),
+    /*
+     * Hele kortet kan klikkes - ikke kun knappen.
+     *
+     * Man peger paa plakaten, fordi det er den, man kan se. En knap, der
+     * hedder "Open" nede i hjoernet, er ikke der, oejet gaar hen
+     * (Andreas, 2026-08-29). Reglen for HVAD et klik goer er den samme som
+     * i soegningen: har man titlen, aabnes dens side; ellers vises
+     * overblikket foerst.
+     */
     el('div', { class: 'plakater' }, c.dele.map((del) => el('div', {
       class: `soegekort${del.denne ? ' denne' : ''}`,
+      role: del.denne ? null : 'button',
+      tabindex: del.denne ? null : '0',
+      // Ingen vej fra den, man staar paa, til sig selv.
+      onclick: del.denne ? null : () => aabnTraeffer({
+        id: del.id, kind: 'movie', tmdbId: del.tmdbId, name: del.name,
+        year: del.year, posterPath: del.posterPath, tracked: !!del.iBiblioteket,
+      }),
+      onkeydown: del.denne ? null : (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          aabnTraeffer({
+            id: del.id, kind: 'movie', tmdbId: del.tmdbId, name: del.name,
+            year: del.year, posterPath: del.posterPath, tracked: !!del.iBiblioteket,
+          });
+        }
+      },
     }, [
       del.posterPath
         ? el('img', { class: 'plakat', src: `/api/poster/w342${del.posterPath}`,
@@ -1884,13 +2189,19 @@ function samlingsAfsnit(d) {
       ].filter(Boolean).join(' · ') }),
       // Ingen knap paa den, man staar paa - og ingen paa dem, man allerede
       // har. Kun det, der er noget at goere ved.
+      /*
+       * stopPropagation: knappen ligger INDE i et kort, der ogsaa kan
+       * klikkes. Uden den ville et tryk paa Add baade tilfoeje OG navigere
+       * vaek fra siden, saa man aldrig saa at det lykkedes.
+       */
       (!del.denne && !del.iBiblioteket)
         ? el('button', { class: 'btn primary lille', text: 'Add',
-            onclick: (e) => tilfoej({ kind: 'movie', tmdbId: del.tmdbId, name: del.name }, e.target) })
+            onclick: (e) => { e.stopPropagation();
+              tilfoej({ kind: 'movie', tmdbId: del.tmdbId, name: del.name }, e.target); } })
         : null,
       (!del.denne && del.iBiblioteket)
         ? el('button', { class: 'btn ghost lille', text: 'Open',
-            onclick: () => aabnTitel(del.id) })
+            onclick: (e) => { e.stopPropagation(); aabnTitel(del.id); } })
         : null,
     ]))),
   ]);
@@ -1915,7 +2226,11 @@ function beslaegtedeAfsnit() {
   if (!b.length) return el('p', { class: 'dim lille', text: 'TMDB has nothing related.' });
   return el('section', {}, [
     el('h2', { text: 'Related' }),
-    el('div', { class: 'plakater' }, b.map((r) => el('div', { class: 'soegekort' }, [
+    el('div', { class: 'plakater' }, b.map((r) => el('div', {
+      class: 'soegekort', role: 'button', tabindex: '0',
+      onclick: () => aabnTraeffer(r),
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); aabnTraeffer(r); } },
+    }, [
       r.poster
         ? el('img', { class: 'plakat', src: r.poster, alt: '', loading: 'lazy' })
         : el('div', { class: 'plakat' }),
@@ -1924,9 +2239,9 @@ function beslaegtedeAfsnit() {
         + `${r.year ? ' · ' + r.year : ''}` }),
       r.tracked
         ? el('button', { class: 'btn ghost lille', text: 'Open',
-            onclick: () => aabnTitel(r.id) })
+            onclick: (e) => { e.stopPropagation(); aabnTitel(r.id); } })
         : el('button', { class: 'btn primary lille', text: 'Add',
-            onclick: (e) => tilfoej(r, e.target) }),
+            onclick: (e) => { e.stopPropagation(); tilfoej(r, e.target); } }),
     ]))),
   ]);
 }

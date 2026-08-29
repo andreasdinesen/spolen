@@ -11,7 +11,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 14;
+const APP_VERSION = 15;
 
 /* ---------------------------------------------------------------- tema */
 
@@ -67,7 +67,7 @@ const state = {
   // at noget andet ser forkert ud. En starttilstand skal have ALLE de felter,
   // fladen laeser, ogsaa dem der altid fyldes af et svar.
   soeg: { q: '', lokale: [], resultater: [], arbejder: false, fejl: '' },
-  bibliotek: { raekker: [] },
+  bibliotek: { raekker: [], slags: 'alle' },
   titel: { id: null, data: null, fejl: '' },
   kalender: { hentet: false, fejl: '', raekker: [], idag: '', fra: '', til: '', icalPath: null },
   import: { tekst: '', analyse: null, status: null, fejl: '', dateOrder: null },
