@@ -59,6 +59,28 @@ const HJAELP = {
       + 'is the owner’s setting. Plex is still the only service that can report what you '
       + 'actually watched — everything else is an import or marked by hand.',
   },
+  plexToken: {
+    titel: 'Finding your Plex token',
+    url: 'https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/',
+    trin: [
+      'Quickest, from browser storage: open app.plex.tv, open the developer tools '
+        + 'console, and type  localStorage.getItem("myPlexAccessToken")  — it prints the '
+        + 'token. If that key is not there, list them with  '
+        + 'Object.keys(localStorage).filter(k => /token/i.test(k))',
+      'Plex’s own documented way: open any film or series on app.plex.tv, then the … menu '
+        + '→ Get Info → View XML. The page that opens has ?X-Plex-Token=… in its address. '
+        + 'Copy everything after the equals sign. Slower, but it survives Plex changing '
+        + 'their web app.',
+      'Or the Network tab: open developer tools → Network, click around in Plex, and find '
+        + 'X-Plex-Token in the address or headers of any request.',
+      'Paste it in the field, not anywhere else, then press Find my servers.',
+    ],
+    note: 'This is an ACCOUNT token, not a server token — and that is what the discovery '
+      + 'needs. It gives access to your Plex account, so treat it like a password. spolen '
+      + 'keeps it server-side and never sends it back to the browser, and you can always '
+      + 'revoke it by signing out of all devices in your Plex account settings.',
+  },
+
   noegler: {
     titel: 'Access keys and Claude',
     url: null,

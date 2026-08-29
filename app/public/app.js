@@ -12,7 +12,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 6;
+const APP_VERSION = 7;
 
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
@@ -1789,17 +1789,12 @@ function importSide() {
   return el('div', {}, [
     el('h2', { text: 'Import your history' }),
     el('p', { class: 'dim lille', text:
-      'Netflix viewing activity, Trakt, Letterboxd, IMDb or TV Time — as a .csv file, '
-      + 'or the whole GDPR export as a .zip. '
+      'Drop a Trakt export straight from Downloads — the whole .zip, unopened. '
+      + 'Also takes Netflix viewing activity, Letterboxd, IMDb and TV Time as '
+      + '.csv, .json or .zip. '
       + 'Sequel syncs to Trakt, so a Trakt export is the way out of Sequel.' }),
 
-    el('div', { class: 'formgrid' }, [
-      el('label', { text: 'File' }),
-      el('input', {
-        type: 'file', accept: '.csv,.txt,text/csv,text/plain', style: 'font-size:16px',
-        onchange: (e) => laesImportFil(e.target.files && e.target.files[0]),
-      }),
-    ]),
+    dropZone(),
 
     traktAfsnit(),
     plexAfsnit(),
@@ -1913,7 +1908,7 @@ function importFremdrift(s) {
 
 function tomImport() {
   return { tekst: '', filer: null, analyse: null, status: null, fejl: '',
-    dateOrder: null, zipNavn: null };
+    dateOrder: null, zipNavn: null, overZonen: false };
 }
 
 async function laesImportFil(fil) {
@@ -2322,10 +2317,14 @@ function plexAfsnit() {
      * token, netop den server vil acceptere, saa vi spoerger den i stedet.
      */
     el('div', { class: 'formgrid' }, [
-      el('label', { text: 'Plex account token' }), tokenFelt,
+      // "?"-knappen sidder ved selve FELTET, ikke ved overskriften: det er
+      // her, man staar og ikke ved, hvor token'et findes.
+      el('label', { class: 'medhjaelp' }, ['Plex account token', hjaelpeKnap('plexToken')]),
+      tokenFelt,
       el('button', { class: 'btn primary', text: 'Find my servers',
         onclick: (e) => findServere(e.target) }),
     ]),
+    hjaelpePanel('plexToken'),
 
     p.fejl ? el('p', { class: 'noeglestatus mangler', text: p.fejl }) : null,
     p.servere ? serverListe(p.servere) : null,
@@ -2664,6 +2663,64 @@ async function proevManuel(knap, gem) {
   knap.disabled = false;
   knap.textContent = gammel;
   tegnSide();
+}
+
+
+/* ------------------------------------------------------- traek og slip */
+
+/*
+ * Et felt, man kan SLIPPE filen paa.
+ *
+ * En Trakt-eksport lander i Downloads som én .zip, og vejen derfra gennem en
+ * filvaelger er tre klik. Det er en import, man laver ÉN gang - den skal
+ * ikke foles besvaerlig (Andreas, 2026-08-29).
+ *
+ * Filvaelgeren bliver liggende bagved: traek og slip findes ikke paa en
+ * telefon, saa zonen kan ogsaa KLIKKES.
+ */
+function dropZone() {
+  const felt = el('input', {
+    type: 'file', hidden: true,
+    // .zip MANGLEDE her indtil nu: attributterne stod paa én linje, saa en
+    // tidligere rettelse af accept ramte aldrig, og filvaelgeren ville slet
+    // ikke vise .zip-filer.
+    accept: '.csv,.txt,.json,.zip,text/csv,text/plain,application/json,application/zip',
+    onchange: (e) => laesImportFil(e.target.files && e.target.files[0]),
+  });
+
+  return el('div', {
+    class: `dropzone${state.import.overZonen ? ' over' : ''}`,
+    role: 'button', tabindex: '0',
+    /*
+     * dragover SKAL kalde preventDefault - ellers aabner browseren filen i
+     * stedet for at give os den, og siden bliver erstattet af raa JSON.
+     */
+    ondragover: (e) => {
+      e.preventDefault();
+      if (!state.import.overZonen) { state.import.overZonen = true; opdaterZone(); }
+    },
+    ondragleave: () => { state.import.overZonen = false; opdaterZone(); },
+    ondrop: (e) => {
+      e.preventDefault();
+      state.import.overZonen = false;
+      opdaterZone();
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) laesImportFil(f);
+    },
+    onclick: () => felt.click(),
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); felt.click(); } },
+  }, [
+    el('div', { class: 'dropzone-tekst', text: 'Drop your export here' }),
+    el('div', { class: 'dim lille', text: 'or click to choose — .zip, .csv or .json' }),
+    felt,
+  ]);
+}
+
+/* Kun KLASSEN skiftes. En gentegning af hele siden midt i et traek ville
+   rive zonen ned, og saa fyrer drop aldrig. */
+function opdaterZone() {
+  const z = document.querySelector('.dropzone');
+  if (z) z.classList.toggle('over', !!state.import.overZonen);
 }
 
 /* ---- p8_stats.js ---- */
@@ -3009,6 +3066,28 @@ const HJAELP = {
       + 'is the owner’s setting. Plex is still the only service that can report what you '
       + 'actually watched — everything else is an import or marked by hand.',
   },
+  plexToken: {
+    titel: 'Finding your Plex token',
+    url: 'https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/',
+    trin: [
+      'Quickest, from browser storage: open app.plex.tv, open the developer tools '
+        + 'console, and type  localStorage.getItem("myPlexAccessToken")  — it prints the '
+        + 'token. If that key is not there, list them with  '
+        + 'Object.keys(localStorage).filter(k => /token/i.test(k))',
+      'Plex’s own documented way: open any film or series on app.plex.tv, then the … menu '
+        + '→ Get Info → View XML. The page that opens has ?X-Plex-Token=… in its address. '
+        + 'Copy everything after the equals sign. Slower, but it survives Plex changing '
+        + 'their web app.',
+      'Or the Network tab: open developer tools → Network, click around in Plex, and find '
+        + 'X-Plex-Token in the address or headers of any request.',
+      'Paste it in the field, not anywhere else, then press Find my servers.',
+    ],
+    note: 'This is an ACCOUNT token, not a server token — and that is what the discovery '
+      + 'needs. It gives access to your Plex account, so treat it like a password. spolen '
+      + 'keeps it server-side and never sends it back to the browser, and you can always '
+      + 'revoke it by signing out of all devices in your Plex account settings.',
+  },
+
   noegler: {
     titel: 'Access keys and Claude',
     url: null,

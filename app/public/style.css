@@ -2526,3 +2526,22 @@ button.version-linje.gammel:hover { text-decoration: underline; }
 /* Den manuelle Plex-vej er foldet sammen: den er undtagelsen, ikke reglen. */
 .manuel-plex { margin-top: 14px; border-top: 1px solid var(--border-soft); padding-top: 8px; }
 .manuel-plex summary { color: var(--muted); font-size: .88rem; }
+
+/* ---- Traek og slip ---- */
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: var(--r);
+  padding: 26px 18px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--card);
+  margin: 12px 0;
+  transition: border-color .12s ease, background .12s ease;
+}
+.dropzone:hover { border-color: var(--accent); }
+.dropzone:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* Tydelig kvittering for, at filen ER over feltet - ellers slipper man den
+   ved siden af og tror, at intet skete. */
+.dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone.over .dropzone-tekst { color: var(--accent-text); }
+.dropzone-tekst { font-weight: 600; margin-bottom: 4px; }

@@ -1821,6 +1821,36 @@ function hentPlakat(stoerrelse, navn) {
   });
 }
 
+/**
+ * Henter en titels plakat NU, i stedet for ved foerste visning.
+ *
+ * Plakatstien staar allerede i titlen efter en import - det er selve
+ * BILLEDET, der mangler, og det hentes normalt foerst naar nogen kigger.
+ * Efter en stor import betyder det, at biblioteket staar med tomme felter,
+ * indtil man har rullet forbi hver enkelt (Andreas, 2026-08-29).
+ *
+ * Kun w342: det er den stoerrelse, gitrene og titelvisningen bruger. De
+ * smaa (w154) er lette og faa steder, og de kan hentes ved behov - at hente
+ * begge ville fordoble trafikken for lidt.
+ *
+ * Fejler den, er det ligegyldigt: proxyen henter den igen ved foerste
+ * visning. Derfor ingen fejlhaandtering ud over at lade vaere med at kaste.
+ */
+async function forhentPlakat(posterPath) {
+  const navn = String(posterPath || '').replace(/^\//, '');
+  if (!navn || !PLAKAT_NAVN.test(navn)) return false;
+  try {
+    fs.accessSync(plakatSti('w342', navn));
+    return false;                      // ligger der allerede
+  } catch { /* skal hentes */ }
+  try {
+    await hentPlakat('w342', navn);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function serverPlakat(req, res, stoerrelse, navn) {
   if (!PLAKAT_STOERRELSER.has(stoerrelse) || !PLAKAT_NAVN.test(navn)) {
     apiFejl(res, 400, 'bad_request', 'Not a poster path.');
@@ -2300,6 +2330,10 @@ async function koerOpdatering() {
         });
         gemTitel(hentet.titel);
         if (hentet.afsnit.length) gemAfsnit(raekke.id, hentet.afsnit);
+          // Plakaten kan vaere skiftet - fx naar en serie faar ny saeson.
+          if (hentet.titel.data && hentet.titel.data.posterPath) {
+            await forhentPlakat(hentet.titel.data.posterPath);
+          }
       } catch (err) {
         opdaterJob.fejl.push(`${raekke.name}: ${err.message}`);
         /*
@@ -2686,6 +2720,14 @@ async function sikrTitel(noegle, kind, tmdbId, sprog) {
   });
   gemTitel(hentet.titel);
   if (hentet.afsnit.length) gemAfsnit(id, hentet.afsnit);
+  /*
+   * Plakaten hentes med det samme, saa et nyimporteret bibliotek ikke staar
+   * med tomme felter. Det er ét billede pr. titel - de afsnit, vi lige har
+   * hentet, faar ikke deres egne.
+   */
+  if (hentet.titel.data && hentet.titel.data.posterPath) {
+    await forhentPlakat(hentet.titel.data.posterPath);
+  }
   return { id, ny: true };
 }
 
@@ -3378,15 +3420,17 @@ const mcp = mcpModul.opret({
     if (!m) return { fejl: 'That is not a title id. Use search first to get one.' };
     const kind = m[1];
     const tmdbId = Number(m[2]);
-    let titel = hentTitel(id);
-    if (!titel) {
-      const hentet = await tmdb.hentTitel(tmdbNoegle(), kind, tmdbId, {
-        sprog: metadataSprog(), pause: () => new Promise((r) => setTimeout(r, 250)),
-      });
-      gemTitel(hentet.titel);
-      if (hentet.afsnit.length) gemAfsnit(id, hentet.afsnit);
-      titel = hentTitel(id);
-    }
+    /*
+     * ÉN vej ind: sikrTitel.
+     *
+     * Den samme hentning stod FIRE steder, og da plakat-forhentningen
+     * blev lagt i sikrTitel, virkede den kun det ene: tilfoejede man en
+     * titel fra fladen eller fra MCP, blev plakaten ikke hentet
+     * (Andreas, 2026-08-29). Fire kopier er fire steder, den naeste
+     * aendring skal huskes - og tre af dem bliver glemt.
+     */
+    await sikrTitel(tmdbNoegle(), kind, tmdbId, metadataSprog());
+    const titel = hentTitel(id);
     if (!hentTracking(userId, id)) {
       gemItem(userId, {
         kind: 'tracking', titleId: id,
@@ -4044,20 +4088,17 @@ const ROUTES = {
 
     // Er den allerede i cachen, hentes den ikke igen. Det er baade hurtigere
     // og hoefligere - og det er derfor cachen ikke har et user_id.
-    let titel = hentTitel(id);
-    if (!titel) {
-      const hentet = await tmdb.hentTitel(tmdbNoegle(), kind, tmdbId, {
-        // Installationens sprog - ikke tilfoejerens. Ellers afhaenger en
-        // titels sprog af, hvem der tilfaeldigvis tilfoejede den.
-        sprog: metadataSprog(),
-        // ~250 ms mellem saeson-kald. En serie med ti saesoner er ti kald,
-        // og TMDB skal ikke maerke, at nogen tilfoejer et helt bibliotek.
-        pause: () => new Promise((r) => setTimeout(r, 250)),
-      });
-      gemTitel(hentet.titel);
-      if (hentet.afsnit.length) gemAfsnit(id, hentet.afsnit);
-      titel = hentTitel(id);
-    }
+    /*
+     * ÉN vej ind: sikrTitel.
+     *
+     * Den samme hentning stod FIRE steder, og da plakat-forhentningen
+     * blev lagt i sikrTitel, virkede den kun det ene: tilfoejede man en
+     * titel fra fladen eller fra MCP, blev plakaten ikke hentet
+     * (Andreas, 2026-08-29). Fire kopier er fire steder, den naeste
+     * aendring skal huskes - og tre af dem bliver glemt.
+     */
+    await sikrTitel(tmdbNoegle(), kind, tmdbId, metadataSprog());
+    const titel = hentTitel(id);
 
     // Brugerens holdning. Findes den i forvejen, roeres den ikke - at
     // "tilfoeje" noget, man allerede foelger, maa ikke nulstille ens tilstand.
