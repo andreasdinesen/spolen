@@ -268,3 +268,28 @@ bruger i tabellen", præcis den fælde tovo advarer om.
   Claude Code og Claude Desktop — men ikke som fjern-connector på claude.ai.
 - Printgennemgang.
 - Notifikationer (fra F2 — kræver https).
+
+
+## v1 udgivet — 2026-08-29
+
+`andreasdinesen/spolen`, offentligt. Commit → `git tag v1` → `git push --tags`,
+alle tre trin gennemført.
+
+**Audit før push:** hele repoet scannet for tokens, JWT'er, mailadresser,
+IP-adresser og private navne. Ét fund — en opdigtet 32-hex-fixture i
+`tests/tmdb.test.js`, der *lignede* en TMDB-nøgle — erstattet med `deadbeef…`,
+så en læser kan se, at den er falsk. Databasen og plakat-cachen ligger i
+`.gitignore` og er aldrig i repoet.
+
+*Første auditforsøg kørte slet ikke:* zsh åd `--include=*.js`-mønstrene, og hver
+"ingen fund" var en shell-fejl. En audit, der ikke kører, er værre end ingen,
+fordi den ser ud til at bestå. Kørt om i Python.
+
+**Installationsvejen er efterprøvet, ikke påstået:** tarball'en hentet fra
+`refs/tags/v1` (200, 201 KB), pakket ud, `app/server.js` og den genererede
+`app/public/app.js` fundet, og serveren startet på en tom datamappe — alle fem
+migrationer kørte, `/api/public-config` svarede 200.
+
+**Næste skridt for Andreas:** i Yggdrasil Panel → **Runes → Browse GitHub →
+Reload**, derefter installér. TMDB-nøglen skal tastes ind igen, da den kun
+findes i den lokale prøvedatabase.
