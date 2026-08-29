@@ -93,6 +93,91 @@ function kald(baseUrl, token, sti, params) {
   });
 }
 
+/* ------------------------------------------------- server-opdagelse */
+
+/*
+ * Finder de servere, KONTOEN har adgang til - via plex.tv, ikke via en
+ * adresse, brugeren selv skal skaffe.
+ *
+ * Det er den eneste vej, der virker, naar man ikke selv koerer en server.
+ * Bruger man app.plex.tv til at se film, der er DELT med én, findes der
+ * ingen IP-adresse at skrive: serveren staar hos en anden, og dens adresse
+ * skifter. plex.tv kender den, og kender ogsaa det token, netop den server
+ * vil acceptere (Andreas, 2026-08-29).
+ */
+async function hentServere(kontoToken) {
+  const r = await new Promise((resolve, reject) => {
+    const req = https.request({
+      host: 'plex.tv', path: '/api/v2/resources?includeHttps=1&includeRelay=1', method: 'GET',
+      headers: {
+        accept: 'application/json',
+        'X-Plex-Token': kontoToken,
+        // UDEN den svarer plex.tv 400 - og fejlen naevner den ved navn,
+        // hvilket er sjaeldent venligt af et API.
+        'X-Plex-Client-Identifier': 'spolen',
+        'X-Plex-Product': 'spolen',
+      },
+    }, (res) => {
+      const b = [];
+      res.on('data', (x) => b.push(x));
+      res.on('end', () => resolve({ status: res.statusCode, tekst: Buffer.concat(b).toString('utf8') }));
+    });
+    req.on('error', (e) => reject(new PlexFejl(`Could not reach plex.tv: ${e.message}`, 502)));
+    req.setTimeout(15000, () => { req.destroy(); reject(new PlexFejl('plex.tv did not answer.', 504)); });
+    req.end();
+  });
+
+  if (r.status === 401) {
+    throw new PlexFejl('plex.tv rejected the token. Get a new X-Plex-Token.', 502, 'plex_bad_token');
+  }
+  if (r.status !== 200) throw new PlexFejl(`plex.tv answered ${r.status}.`, 502);
+  let liste;
+  try { liste = JSON.parse(r.tekst); } catch { throw new PlexFejl('plex.tv sent no JSON.', 502); }
+
+  return (Array.isArray(liste) ? liste : [])
+    .filter((x) => x.provides && x.provides.includes('server'))
+    .map((x) => ({
+      navn: x.name || '(unnamed)',
+      maskinId: x.clientIdentifier,
+      // EGET token pr. server. En delt server accepterer ikke kontoens
+      // token - kun det, plex.tv har udstedt til netop den server.
+      token: x.accessToken || kontoToken,
+      ejer: !!x.owned,
+      ejerNavn: x.sourceTitle || null,
+      forbindelser: (x.connections || [])
+        .map((c) => ({ uri: c.uri, lokal: !!c.local, relay: !!c.relay, protokol: c.protocol }))
+        /*
+         * Raekkefoelgen er efter, hvad der VIRKER udefra:
+         *   1. https og ikke-lokal   - plex.direct, naas fra hvor som helst
+         *   2. relay                 - langsom, men kommer altid igennem
+         *   3. lokal                 - kun hvis spolen staar paa samme net
+         * En lokal adresse foerst ville betyde, at runen proever
+         * 192.168.x.x og timer ud, foer den finder den, der duer.
+         */
+        .sort((a, b) => {
+          const p = (c) => (c.relay ? 2 : (c.lokal ? 3 : (c.protokol === 'https' ? 0 : 1)));
+          return p(a) - p(b);
+        }),
+    }));
+}
+
+/**
+ * Proever forbindelserne én ad gangen og beholder den FOERSTE, der svarer.
+ *
+ * Der er ingen vej udenom at proeve: plex.tv opgiver adresser, ikke
+ * garantier. En hjemmeserver kan vaere slukket, og en lokal adresse virker
+ * kun fra samme net.
+ */
+async function foersteVirkende(server) {
+  for (const c of server.forbindelser) {
+    try {
+      const id = await tjekForbindelse(c.uri, server.token);
+      return { uri: c.uri, navn: id.navn, version: id.version, relay: c.relay, lokal: c.lokal };
+    } catch { /* proev den naeste */ }
+  }
+  return null;
+}
+
 /** Er der en Plex-server i den anden ende, og vil den tale med os? */
 async function tjekForbindelse(baseUrl, token) {
   const r = await kald(baseUrl, token, '/identity');
@@ -345,6 +430,7 @@ function oversaetWebhook(payload) {
 
 module.exports = {
   PlexFejl, kald, tjekForbindelse, hentBiblioteker, hentKonti,
+  hentServere, foersteVirkende,
   hentHistorik, hentGuids, laesGuids, oversaetHistorik, noeglerAtSlaaOp,
   laesMultipartFelt, oversaetWebhook,
 };

@@ -12,7 +12,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 4;
+const APP_VERSION = 5;
 
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
@@ -333,6 +333,7 @@ function skal(indhold) {
         state.user = null;
         loginSide('Signed out.');
       } }),
+      versionsLinje(),
       el('p', { class: 'dim tmdb-kredit', text:
         'Uses the TMDB API but is not endorsed or certified by TMDB.' }),
     ]),
@@ -350,6 +351,32 @@ function skal(indhold) {
   ]));
   if (beholdTop) tegnOmniPanel();
   sc.scrollTop = gemtRul;
+}
+
+/*
+ * Versionen, altid synlig i sidebarens fod.
+ *
+ * Det er SAMME tal som runens `version:` i panelet, saa man kan se med det
+ * blotte oeje, om Update/Reinstall faktisk skiftede noget - den hyppigste
+ * forvirring i panelets todelte opdateringsflow (§6).
+ *
+ * Kun et NYERE servertal taeller som "der er en opdatering". `!==` er
+ * forkert den ene vej: er serverens tal LAVERE end det, browseren koerer -
+ * en rullet udgivelse, eller en serverproces der ikke er genstartet - stod
+ * der "v3 available" ved siden af v4, og det er vaas. (doda og Sagu fandt
+ * begge den fejl; spolen havde den ogsaa, i toasten ved opstart.)
+ */
+function versionsLinje() {
+  const server = state.config && state.config.version;
+  if (server && server > APP_VERSION) {
+    return el('button', {
+      class: 'version-linje gammel',
+      title: `Your browser is running v${APP_VERSION}, but the server has v${server}. `
+        + 'Click to reload.',
+      onclick: () => location.reload(),
+    }, [`v${APP_VERSION} · v${server} available — reload`]);
+  }
+  return el('div', { class: 'version-linje', text: `v${APP_VERSION}` });
 }
 
 function tomtRum(overskrift, forklaring) {
@@ -584,7 +611,8 @@ async function indlaes() {
     // Serveren udleverer ogsaa sin egen version. Stemmer den ikke med den her
     // fil, sidder der en gammel app.js i cachen - og saa fejlsoeger man kode,
     // der ikke er indlaest (§5).
-    if (cfg.version && cfg.version !== APP_VERSION) {
+    // Kun NYERE. Se versionsLinje() for hvorfor `!==` var forkert.
+    if (cfg.version && cfg.version > APP_VERSION) {
       toast(`This page is v${APP_VERSION}, the server has v${cfg.version}. Reload.`, 'fejl');
     }
   } catch (err) {

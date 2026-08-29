@@ -2499,3 +2499,26 @@ body.navopen .backdrop {
 /* Den, man staar paa, markeres - ellers leder man efter sig selv i raekken. */
 .soegekort.denne .plakat { outline: 2px solid var(--accent); }
 .soegekort.denne .soegekort-titel { color: var(--accent-text); }
+
+/* Versionen i sidebarens fod. Tabulaere tal, saa linjen ikke danser,
+   naar tallet skifter bredde. */
+.version-linje {
+  display: block;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  margin-top: 10px;
+  border: 0;
+  background: none;
+  padding: 0;
+  text-align: left;
+  font-family: inherit;
+}
+/* Er der en nyere version, er linjen en KNAP - og skal se ud som en. */
+button.version-linje.gammel {
+  color: var(--accent-text);
+  cursor: pointer;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+button.version-linje.gammel:hover { text-decoration: underline; }

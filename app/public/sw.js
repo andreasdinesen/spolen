@@ -14,7 +14,7 @@
  * skift. Kun de statiske filer gemmes.
  */
 
-const VERSION = 4;               /* stemples af build_rune.py */
+const VERSION = 5;               /* stemples af build_rune.py */
 const CACHE = `spolen-v${VERSION}`;
 
 /* Samme ?v=-stempler som index.html, ellers henter appen én fil fra cachen
@@ -64,70 +64,55 @@ self.addEventListener('fetch', (e) => {
    */
   if (url.pathname.startsWith('/api/') || url.pathname === '/mcp') return;
 
+  /*
+   * HTML-SKALLEN HENTES FRA NETTET FØRST. Cachen er kun nødnettet offline.
+   *
+   * Første udgave serverede ALT cache-først, også '/'. Det satte hele
+   * versionsstemplingen ud af kraft: den cachede HTML pegede på app.js?v=3,
+   * og den fil lå også i cachen — så en installeret v4 kørte v3's frontend
+   * i browseren for evigt. Målt 2026-08-29: serveren udleverede v4 med de
+   * rigtige funktioner i, mens browseren viste v2-fladen.
+   *
+   * De VERSIONEREDE filer må gerne komme fra cachen: deres URL skifter ved
+   * hver udgivelse, så en gammel kopi kan aldrig forveksles med en ny. Det
+   * er kun skallen, der har samme adresse hele vejen igennem, og derfor er
+   * det kun skallen, der skal spørge nettet.
+   */
+  const erSkal = req.mode === 'navigate'
+    || url.pathname === '/'
+    || url.pathname.endsWith('/index.html');
+
+  if (erSkal) {
+    e.respondWith((async () => {
+      try {
+        const frisk = await fetch(req);
+        if (frisk && frisk.ok) (await caches.open(CACHE)).put('./', frisk.clone());
+        return frisk;
+      } catch {
+        // Offline: vis den sidst kendte skal, så appen i det mindste
+        // tegner sig selv og kan sige, at der ikke er forbindelse.
+        const cachet = await caches.match('./');
+        if (cachet) return cachet;
+        throw new Error('offline');
+      }
+    })());
+    return;
+  }
+
   e.respondWith((async () => {
     const cachet = await caches.match(req);
-    if (cachet) {
-      // Hent en frisk kopi i baggrunden, så næste indlæsning er opdateret,
-      // men vis den cachede med det samme.
-      e.waitUntil((async () => {
-        try {
-          const frisk = await fetch(req);
-          if (frisk && frisk.ok) (await caches.open(CACHE)).put(req, frisk.clone());
-        } catch { /* offline er ikke en fejl her */ }
-      })());
-      return cachet;
-    }
+    if (cachet) return cachet;
     try {
-      return await fetch(req);
+      const frisk = await fetch(req);
+      // Kun de versionerede filer gemmes. Alt andet ville samle sig op.
+      if (frisk && frisk.ok && url.search.startsWith('?v=')) {
+        (await caches.open(CACHE)).put(req, frisk.clone());
+      }
+      return frisk;
     } catch {
-      // Offline og ikke i cachen: giv skallen, så appen i det mindste tegner
-      // sig selv og kan sige, at der ikke er forbindelse.
       const skal = await caches.match('./');
       if (skal) return skal;
       throw new Error('offline');
     }
-  })());
-});
-
-/* ------------------------------------------------------- notifikationer */
-
-/*
- * Beskeden er krypteret af serveren og pakket ud af browseren, foer den
- * naar hertil - vi faar ren JSON.
- *
- * `waitUntil` er ikke valgfri: uden den kan browseren lukke workeren, foer
- * notifikationen er vist, og saa forsvinder beskeden lydloest.
- */
-self.addEventListener('push', (e) => {
-  let d = {};
-  try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'spolen' }; }
-  e.waitUntil(self.registration.showNotification(d.title || 'spolen', {
-    body: d.body || '',
-    icon: './icon-192.png',
-    badge: './icon-192.png',
-    // Samme tag = en NY besked erstatter den gamle i stedet for at stable
-    // sig op. Ellers har man ti notifikationer om den samme serie.
-    tag: d.tag || d.url || 'spolen',
-    data: { url: d.url || '/' },
-  }));
-});
-
-self.addEventListener('notificationclick', (e) => {
-  e.notification.close();
-  const maal = (e.notification.data && e.notification.data.url) || '/';
-  e.waitUntil((async () => {
-    /*
-     * Er appen allerede aaben, skal den have FOKUS - ikke aabnes igen.
-     * Ellers ender man med en ny fane hver gang, man trykker paa en besked.
-     */
-    const klienter = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    for (const k of klienter) {
-      if (k.url.includes(self.location.origin)) {
-        await k.focus();
-        if ('navigate' in k) await k.navigate(maal).catch(() => null);
-        return;
-      }
-    }
-    await self.clients.openWindow(maal);
   })());
 });

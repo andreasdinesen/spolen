@@ -115,6 +115,8 @@ const PERSONLIGE_SETTINGS = new Set([
   'plex_token',        // hemmelig - personlig, fordi hver bruger har sin egen konto
   'trakt_access_token',
   'trakt_refresh_token',
+  'plex_konto_token',    // hemmelig - kontoens token til plex.tv-opdagelsen
+  'plex_server_id',      // hvilken af de tilgaengelige servere der er valgt
   'plex_webhook_token',  // saettes server-side, aldrig af klienten
   'plex_account_navn',   // Plex' webhook sender navn, ikke id
   'plex_last_sync',      // epoke for sidste hentede viewedAt
@@ -2517,6 +2519,13 @@ async function plexTik() {
  */
 const traktLogins = new Map();
 
+/*
+ * De adresser, opdagelsen fandt. I MEMORY: en plex.direct-adresse indeholder
+ * et maskin-id og kan skifte, saa den skal ikke ligge og blive gammel i
+ * databasen. Gaar serveren ned imellem, soeger man bare igen.
+ */
+const plexServerCache = new Map();
+
 const importJob = {
   koerer: false,
   userId: null,
@@ -4175,6 +4184,70 @@ const ROUTES = {
    * gemmes - ellers skal man gemme noget forkert for at opdage, at det er
    * forkert. Gemmes foerst naar `save` er sat.
    */
+  /*
+   * Find de servere, KONTOEN har adgang til.
+   *
+   * Vejen for alle, der ikke selv koerer en Plex-server: bruger man
+   * app.plex.tv til at se film, der er DELT med én, findes der ingen
+   * IP-adresse at skrive. plex.tv kender adresserne - og det token, hver
+   * enkelt server vil acceptere.
+   */
+  'POST /api/plex/discover': async (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const body = await readJsonBody(req);
+    const token = str(body.token, 200) || getSetting(user.id, 'plex_konto_token', '');
+    if (!token) {
+      apiFejl(res, 400, 'bad_request', 'A Plex account token is needed to find your servers.');
+      return;
+    }
+    const servere = await plex.hentServere(token);
+    if (body.save) setSetting(user.id, 'plex_konto_token', token);
+
+    /*
+     * Hver server proeves, saa brugeren ser hvad der FAKTISK kan naas -
+     * ikke en liste over adresser, plex.tv mener findes. En hjemmeserver
+     * kan vaere slukket, og en lokal adresse virker kun fra samme net.
+     */
+    const ud = [];
+    for (const srv of servere.slice(0, 10)) {
+      const virker = await plex.foersteVirkende(srv);
+      ud.push({
+        id: srv.maskinId,
+        navn: srv.navn,
+        ejer: srv.ejer,
+        ejerNavn: srv.ejerNavn,
+        naaet: !!virker,
+        // Adressen vises IKKE - den indeholder et maskin-id og hoerer ikke
+        // hjemme i en flade. Kun HVORDAN den blev naaet.
+        vej: virker ? (virker.relay ? 'relay' : (virker.lokal ? 'local network' : 'direct')) : null,
+        version: virker ? virker.version : null,
+      });
+      if (virker) plexServerCache.set(srv.maskinId, { uri: virker.uri, token: srv.token });
+    }
+    sendJson(res, 200, { servers: ud });
+  },
+
+  /* Vaelg den server, historikken skal hentes fra. */
+  'POST /api/plex/select': async (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const body = await readJsonBody(req);
+    const id = str(body.serverId, 80);
+    const c = plexServerCache.get(id);
+    if (!c) {
+      apiFejl(res, 400, 'unknown_server',
+        'That server was not among the reachable ones. Search again.');
+      return;
+    }
+    setSetting(user.id, 'plex_server_id', id);
+    setSetting(user.id, 'plex_url', c.uri);
+    setSetting(user.id, 'plex_token', c.token);
+    audit('plex-server-valgt', user.id, id);
+    const konti = await plex.hentKonti(c.uri, c.token).catch(() => []);
+    sendJson(res, 200, { ok: true, accounts: konti });
+  },
+
   'POST /api/plex/test': async (req, res) => {
     const user = requireUser(req, res);
     if (!user) return;
