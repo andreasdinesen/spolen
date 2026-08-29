@@ -295,7 +295,28 @@ def byg_yaml(version):
             },
             'ports': [{'name': 'web', 'default': 3000, 'protocol': 'tcp'}],
             'watchers': [{'name': 'Serverfejl i spolen', 'pattern': r'\[fejl\]', 'threshold': 5}],
-            'events': [{'name': 'Sikkerhedshaendelser i spolen', 'pattern': r'\[sikkerhed\]'}],
+            # events: er IKKE watchers:. Panelet kraever key + label + match,
+            # og `match` skal have en INDFANGNINGSGRUPPE - den er det subjekt,
+            # haendelsen rulles op pr. (her IP-adressen). Foerste udgave brugte
+            # watchers-skemaet (name + pattern) og blev afvist af panelet med
+            # "gameskill.events[0].key is required". Se tjek_events() nedenfor.
+            'events': [
+                {'key': 'spolen_login_fejl',
+                 'label': 'Mislykket login i spolen',
+                 'match': r'\[sikkerhed\] login-fejl bruger=\S+ ip=(\S+)'},
+                {'key': 'spolen_totp_fejl',
+                 'label': 'Forkert totrinskode i spolen',
+                 'match': r'\[sikkerhed\] totp-fejl bruger=\S+ ip=(\S+)'},
+                {'key': 'spolen_noegle_afvist',
+                 'label': 'Afvist adgangsnoegle i spolen',
+                 'match': r'\[sikkerhed\] noegle-afvist ip=(\S+)'},
+                {'key': 'spolen_ical_afvist',
+                 'label': 'Afvist kalender-token i spolen',
+                 'match': r'\[sikkerhed\] ical-token-afvist ip=(\S+)'},
+                {'key': 'spolen_registrering_afvist',
+                 'label': 'Afvist registrering i spolen',
+                 'match': r'\[sikkerhed\] registrering-afvist ip=(\S+)'},
+            ],
             # Plakaterne er REN CACHE - de kan altid hentes fra TMDB igen.
             # Derfor kun databasen i backuppen: et hus med 500 titler har
             # let 20 MB plakater, og de ville fylde hver eneste backup uden
@@ -305,6 +326,32 @@ def byg_yaml(version):
                      'backup_first': True},
         }
     }
+
+
+def tjek_events(doc):
+    """events: har et ANDET skema end watchers: - og panelet siger det foerst.
+
+    Panelet afviste v1 med "gameskill.events[0].key is required", fordi
+    blokken var skrevet med watchers' felter (name + pattern). Vagten her
+    flytter den besked fra panelet til build'et, hvor den hoerer hjemme.
+    """
+    for i, e in enumerate(doc['gameskill'].get('events', [])):
+        for felt in ('key', 'label', 'match'):
+            if not e.get(felt):
+                fejl(f'events[{i}] mangler "{felt}" - events er ikke watchers')
+        if '(' not in e['match']:
+            fejl(f'events[{i}].match har ingen indfangningsgruppe - '
+                 'uden den er der intet subjekt at rulle haendelsen op pr.')
+        try:
+            re.compile(e['match'])
+        except re.error as err:
+            fejl(f'events[{i}].match er ikke et gyldigt regulaert udtryk: {err}')
+    for i, w in enumerate(doc['gameskill'].get('watchers', [])):
+        for felt in ('name', 'pattern'):
+            if not w.get(felt):
+                fejl(f'watchers[{i}] mangler "{felt}"')
+    print(f'  events: {len(doc["gameskill"].get("events", []))} gyldige, '
+          f'watchers: {len(doc["gameskill"].get("watchers", []))}')
 
 
 def main():
@@ -319,6 +366,7 @@ def main():
     tjek_git(filer)
 
     doc = byg_yaml(version)
+    tjek_events(doc)
     tekst = yaml.dump(doc, allow_unicode=False, sort_keys=False, width=120)
     # Valider ved at LAESE den igen - en YAML, panelet ikke kan parse, er
     # vaerre end ingen YAML.

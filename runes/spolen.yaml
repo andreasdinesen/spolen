@@ -70,8 +70,21 @@ gameskill:
     pattern: \[fejl\]
     threshold: 5
   events:
-  - name: Sikkerhedshaendelser i spolen
-    pattern: \[sikkerhed\]
+  - key: spolen_login_fejl
+    label: Mislykket login i spolen
+    match: \[sikkerhed\] login-fejl bruger=\S+ ip=(\S+)
+  - key: spolen_totp_fejl
+    label: Forkert totrinskode i spolen
+    match: \[sikkerhed\] totp-fejl bruger=\S+ ip=(\S+)
+  - key: spolen_noegle_afvist
+    label: Afvist adgangsnoegle i spolen
+    match: \[sikkerhed\] noegle-afvist ip=(\S+)
+  - key: spolen_ical_afvist
+    label: Afvist kalender-token i spolen
+    match: \[sikkerhed\] ical-token-afvist ip=(\S+)
+  - key: spolen_registrering_afvist
+    label: Afvist registrering i spolen
+    match: \[sikkerhed\] registrering-afvist ip=(\S+)
   backup:
     include:
     - spolen.db
