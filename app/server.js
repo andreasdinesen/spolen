@@ -36,6 +36,22 @@ const { DatabaseSync } = require('node:sqlite');
 
 const totp = require('./totp.js');
 const qr = require('./qr.js');
+/*
+ * Passkeys (§3). Modulet har ligget faerdigt i app/webauthn.js hele tiden -
+ * det var aldrig koblet til (Andreas, 2026-08-30). `credentials`-tabellen kom
+ * med den foerste migration, saa der skal ingen skema-aendring til.
+ *
+ * rpId og origin udledes PR. REQUEST inde i modulet. Det er dét, der goer, at
+ * passkeys virker bag Cloudflare-tunnelen uden en eneste indstilling.
+ */
+const webauthn = require('./webauthn.js').opret({
+  appName: 'spolen',
+  hentCredentials: (userId) => db.prepare(
+    'SELECT id, name, created_at, last_used_at FROM credentials WHERE user_id = ? ORDER BY created_at')
+    .all(String(userId)),
+  findCredential: (id) => db.prepare(
+    'SELECT * FROM credentials WHERE id = ?').get(String(id || '')),
+});
 
 // Delte udregninger. Webappen, MCP og iCal skal give SAMME svar paa
 // "hvad er naeste usete afsnit" - derfor bor regnestykket ét sted.
@@ -3708,6 +3724,208 @@ const ROUTES = {
     sendJson(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, '', 0) });
   },
 
+  /* ----------------------------------------------- passkeys (§3) */
+
+  'GET /api/passkeys': (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    sendJson(res, 200, { passkeys: db.prepare(
+      `SELECT id, name, created_at AS createdAt, last_used_at AS lastUsedAt
+         FROM credentials WHERE user_id = ? ORDER BY created_at`).all(user.id) });
+  },
+
+  'POST /api/passkeys/register/start': (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (!isHttps(req)) {
+      apiFejl(res, 400, 'insecure', 'Passkeys need https.');
+      return;
+    }
+    sendJson(res, 200, webauthn.registerOptions(req, user));
+  },
+
+  'POST /api/passkeys/register/finish': async (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const body = await readJsonBody(req);
+    let cred;
+    try {
+      cred = webauthn.registerVerify(req, user, body);
+    } catch (err) {
+      logSecurity(`passkey-registrering-fejl bruger=${user.username} ip=${clientIp(req)}: ${err.message}`);
+      apiFejl(res, 400, 'bad_passkey', err.message);
+      return;
+    }
+    db.prepare(
+      `INSERT INTO credentials (id, user_id, name, public_key, alg, sign_count, created_at)
+       VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET
+         public_key = excluded.public_key, alg = excluded.alg, sign_count = excluded.sign_count`
+    ).run(cred.id, user.id, str(body.name, 60) || 'Passkey',
+      cred.publicKey, String(cred.alg), cred.signCount, now());
+    audit('passkey-tilfoejet', user.username, null);
+    sendJson(res, 200, { ok: true, id: cred.id });
+  },
+
+  /*
+   * Login MED en passkey - uden login foerst, naturligvis.
+   *
+   * allowCredentials er tom, saa browseren selv viser de noegler, den har til
+   * domaenet ("usernameless"). Brugeren findes af den noegle, der svarer.
+   */
+  'POST /api/passkeys/login/start': (req, res) => {
+    if (!rateAllow(`pklogin:${clientIp(req)}`, 30, 900)) {
+      apiFejl(res, 429, 'rate_limited', 'Too many attempts. Try again shortly.');
+      return;
+    }
+    sendJson(res, 200, webauthn.loginOptions(req));
+  },
+
+  'POST /api/passkeys/login/finish': async (req, res) => {
+    const ip = clientIp(req);
+    if (!rateAllow(`pklogin:${ip}`, 30, 900)) {
+      apiFejl(res, 429, 'rate_limited', 'Too many attempts. Try again shortly.');
+      return;
+    }
+    const body = await readJsonBody(req);
+    let svar;
+    try {
+      svar = webauthn.loginVerify(req, body);
+    } catch (err) {
+      logSecurity(`passkey-login-fejl ip=${ip}: ${err.message}`);
+      apiFejl(res, 401, 'bad_passkey', 'That passkey did not work.');
+      return;
+    }
+    const bruger = db.prepare('SELECT id, username, is_admin FROM users WHERE id = ?')
+      .get(svar.credential.user_id);
+    if (!bruger) { apiFejl(res, 401, 'bad_passkey', 'That passkey did not work.'); return; }
+
+    db.prepare('UPDATE credentials SET sign_count = ?, last_used_at = ? WHERE id = ?')
+      .run(svar.signCount, now(), svar.credential.id);
+
+    /*
+     * INGEN andet trin her. En passkey ER to faktorer i sig selv - noeglen
+     * ligger i telefonen, og telefonen laaser den op med ansigt eller finger.
+     * At kraeve en engangskode ovenpaa ville vaere at bede om det samme to
+     * gange.
+     */
+    audit('login-passkey', bruger.username, null);
+    sendJson(res, 200, { user: { id: bruger.id, username: bruger.username, isAdmin: !!bruger.is_admin } },
+      { 'Set-Cookie': sessionCookie(req, createSession(bruger.id), SESSION_DAYS * 86400) });
+  },
+
+  /* ------------------------------------- totrinsbekraeftelse (§9d) */
+
+  /*
+   * Motoren har vaeret der hele tiden - hemmelighed, engangskoder,
+   * genoprettelseskoder og andet trin ved login. Der manglede bare en vej
+   * til at TAENDE den (Andreas, 2026-08-30).
+   *
+   * `requireUser`, ikke `godkend`: en adgangsnoegle til et program maa ikke
+   * kunne slaa totrinsbekraeftelse fra. Kun et rigtigt login maa roere
+   * kontoens sikkerhed - samme regel som ved kodeordsskifte.
+   */
+  'GET /api/2fa': (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    sendJson(res, 200, totpStatus(user.id));
+  },
+
+  /*
+   * Trin 1: en hemmelighed og et billede at scanne.
+   *
+   * Hemmeligheden gemmes med det samme, men `totp_enabled` saettes IKKE -
+   * det er den tredje tilstand, `pending`. Uden den ville en afbrudt
+   * opsaetning laase kontoen: en hemmelighed, der kraeves ved login, men som
+   * ingen telefon kender.
+   */
+  'POST /api/2fa/start': async (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (getSetting(user.id, 'totp_enabled', '') === '1') {
+      apiFejl(res, 409, 'already_on', 'Two-factor is already on.');
+      return;
+    }
+    const hem = totp.nyHemmelighed();
+    setSetting(user.id, 'totp_secret', hem);
+    setSetting(user.id, 'totp_last', '0');
+    const url = totp.otpauth(hem, user.username, 'spolen');
+    sendJson(res, 200, {
+      // Baade billedet og teksten: en QR-kode kan ikke scannes, hvis man
+      // sidder VED telefonen og ser siden paa den samme skaerm.
+      qr: qr.tilSvg(url, { px: 200 }),
+      secret: hem,
+      url,
+    });
+  },
+
+  /*
+   * Trin 2: bevis, at telefonen virker, FOER kontakten gaar til.
+   *
+   * Uden det kunne man slaa noget til, man ikke kan komme igennem bagefter -
+   * og saa er kontoen laast ude af sin ejer.
+   */
+  'POST /api/2fa/enable': async (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const body = await readJsonBody(req);
+    const hem = getSetting(user.id, 'totp_secret', '');
+    if (!hem) { apiFejl(res, 400, 'not_started', 'Start the setup first.'); return; }
+    const kode = str(body.code, 12).replace(/\s+/g, '');
+    const vindue = totp.tjek(hem, kode);
+    if (vindue === null) {
+      logSecurity(`2fa-opsaetning-fejl bruger=${user.username} ip=${clientIp(req)}`);
+      apiFejl(res, 400, 'bad_code', 'That code is not right. Check the clock on your phone.');
+      return;
+    }
+    setSetting(user.id, 'totp_enabled', '1');
+    setSetting(user.id, 'totp_last', String(vindue));
+    audit('2fa-slaaet-til', user.username, null);
+    // Genoprettelseskoderne vises ÉN gang. De kan ikke hentes frem igen -
+    // kun erstattes af ti nye.
+    sendJson(res, 200, { ok: true, recovery: nyeGenoprettelseskoder(user.id) });
+  },
+
+  /*
+   * Fra igen - mod KODEORD, ikke mod en engangskode.
+   *
+   * Sidder nogen med en aaben session, skal de ikke kunne fjerne det andet
+   * trin uden at kende kodeordet; og har man mistet telefonen, ville et krav
+   * om en engangskode goere det umuligt at komme videre.
+   */
+  'DELETE /api/2fa': async (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const body = await readJsonBody(req);
+    const row = db.prepare('SELECT password FROM users WHERE id = ?').get(user.id);
+    if (!verifyPassword(typeof body.password === 'string' ? body.password : '', row.password)) {
+      logSecurity(`2fa-fra-fejl bruger=${user.username} ip=${clientIp(req)}`);
+      apiFejl(res, 401, 'bad_credentials', 'That is not your password.');
+      return;
+    }
+    slaaTotpFra(user.id);
+    audit('2fa-slaaet-fra', user.username, null);
+    sendJson(res, 200, { ok: true });
+  },
+
+  /* Ti nye koder. De gamle doer i samme aandedrag - ogsaa de ubrugte. */
+  'POST /api/2fa/recovery': async (req, res) => {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const body = await readJsonBody(req);
+    const row = db.prepare('SELECT password FROM users WHERE id = ?').get(user.id);
+    if (!verifyPassword(typeof body.password === 'string' ? body.password : '', row.password)) {
+      apiFejl(res, 401, 'bad_credentials', 'That is not your password.');
+      return;
+    }
+    if (getSetting(user.id, 'totp_enabled', '') !== '1') {
+      apiFejl(res, 400, 'not_on', 'Two-factor is not on.');
+      return;
+    }
+    audit('2fa-nye-koder', user.username, null);
+    sendJson(res, 200, { recovery: nyeGenoprettelseskoder(user.id) });
+  },
+
   'POST /api/password': async (req, res) => {
     // requireUser, ikke godkend: én laekket adgangsnoegle maa ikke kunne give
     // sig selv varig adgang ved at skifte kodeordet (doda F2).
@@ -5037,6 +5255,22 @@ const MOENSTRE = [
         apiFejl(res, 404, 'not_found', 'No such entry.');
         return;
       }
+      sendJson(res, 200, { ok: true });
+    },
+  },
+  {
+    /*
+     * Fjern ÉN passkey. user_id staar i WHERE - en noegle kan kun fjernes af
+     * sin egen ejer, ogsaa selv om id'et bliver gaettet.
+     */
+    metode: 'DELETE', re: /^\/api\/passkeys\/([A-Za-z0-9_-]{1,255})$/,
+    kald: (req, res, ctx) => {
+      const user = requireUser(req, res);
+      if (!user) return;
+      const r = db.prepare('DELETE FROM credentials WHERE id = ? AND user_id = ?')
+        .run(ctx.params[0], user.id);
+      if (!r.changes) { apiFejl(res, 404, 'not_found', 'No such passkey.'); return; }
+      audit('passkey-fjernet', user.username, null);
       sendJson(res, 200, { ok: true });
     },
   },

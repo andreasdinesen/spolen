@@ -81,6 +81,21 @@ const HJAELP = {
       + 'revoke it by signing out of all devices in your Plex account settings.',
   },
 
+  mcp: {
+    titel: 'Connecting Claude to spolen',
+    url: 'https://claude.ai/settings/connectors',
+    trin: [
+      'On claude.ai: open Settings → Connectors → Add custom connector, and paste the address below.',
+      'Claude opens a spolen page in your browser and asks you to approve. You sign in as yourself, '
+        + 'so Claude only ever sees YOUR library — no key changes hands.',
+      'In Claude Code or Claude Desktop there is no browser to approve in. Make an access key under '
+        + '"Access keys" instead, and add spolen as an MCP server with the key as a Bearer token.',
+      'Ask things like "what should I watch tonight?" or "mark episode 4 of Silo as watched".',
+    ],
+    note: 'The connector needs https — Claude cannot reach a plain http address. '
+      + 'You can revoke it at any time under Access keys.',
+  },
+
   noegler: {
     titel: 'Access keys and Claude',
     url: null,

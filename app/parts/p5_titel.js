@@ -36,6 +36,7 @@ function titelSide() {
         onclick: () => { state.view = 'library'; tegnSide(); } }),
       // Kun paa noget, man FAKTISK har. Ellers ville knappen love at fjerne
       // en titel, der ikke er der.
+      t.data.tracking && titel.kind === 'tv' ? skjulFraUpNext(t.data) : null,
       t.data.tracking ? fjernFraBiblioteket(t.data) : null,
     ]),
     el('div', { class: 'titelhoved' }, [
@@ -248,6 +249,48 @@ async function genindlaesTitel(titleId) {
   state.titel.beslaegtede = beslaegtede;
   await Promise.all([hentUpNext(), hentBibliotek()]);
   tegnSide();
+}
+
+/*
+ * Tag en serie ud af Up Next uden at fjerne den.
+ *
+ * Andreas, 2026-08-30: nogle serier er man holdt op med at se, men man vil
+ * stadig kunne se hvor langt man naaede. Up Next er "hvad skal jeg se nu" -
+ * en serie, man ikke er i gang med, goer listen laengere uden at goere den
+ * mere brugbar.
+ *
+ * Tilstanden `paused` FANDTES i forvejen: Up Next viser kun `watching` og
+ * `watchlist`, saa der skulle ingen ny model til - kun en vej til at saette
+ * den. Historikken, fremdriften og selve titlen bliver praecis hvor de er.
+ */
+function skjulFraUpNext(d) {
+  const skjult = d.tracking.state === 'paused';
+  return el('button', {
+    class: 'btn ghost lille',
+    text: skjult ? 'Show in Up Next' : 'Hide from Up Next',
+    title: skjult
+      ? 'Put this series back on Up Next'
+      : 'Keep the series and its history, but stop it showing on Up Next',
+    onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        /*
+         * HELE tracking-objektet sendes med, ikke kun det aendrede felt.
+         * gemItem skriver `data` som ét stykke, saa et delvist objekt ville
+         * slette resten - fx hideSpecials og hvornaar man begyndte.
+         */
+        await api('/items', { method: 'POST', body: Object.assign({}, d.tracking, {
+          state: skjult ? 'watching' : 'paused',
+        }) });
+        toast(skjult ? 'Back on Up Next.' : 'Hidden from Up Next.');
+        await Promise.all([hentUpNext(), hentBibliotek()]);
+        await aabnTitel(d.title.id);
+      } catch (err) {
+        e.target.disabled = false;
+        toast(err.message, 'fejl');
+      }
+    },
+  });
 }
 
 /*

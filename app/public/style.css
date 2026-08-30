@@ -231,9 +231,19 @@ h2 { font-size: 20px; font-weight: 650; letter-spacing: -.01em; margin: 0 0 8px;
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
   padding: 8px 12px 2px;
 }
+
+/*
+ * Versionen til venstre, temaknappen helt ude til HOEJRE (Andreas,
+ * 2026-08-30). De to hoerer ikke sammen - den ene er en oplysning, den anden
+ * er en knap - og side om side lignede knappen noget, der hoerte til tallet.
+ *
+ * `flex-wrap` er væk med vilje: brød raekken, ville knappen falde ned under
+ * versionen og ikke vaere "ude til hoejre" laengere.
+ */
+.foot-row .temabtn { margin-left: auto; }
+.foot-row .version-linje { min-width: 0; }
 
 /* Ét klik mellem lyst og moerkt. flex:none, sa den ikke klemmes sammen,
    naar versionslinjen bliver lang (RUNE-ERFARINGER §4). */
@@ -2786,7 +2796,10 @@ button.version-linje.gammel:hover { text-decoration: underline; }
 /* Tilbage-knappen til venstre, "fjern" helt ude til hoejre - saa de to ikke
    kan forveksles i et hurtigt tryk. */
 .titelrad { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.titelrad .fjernknap { margin-left: auto; color: var(--muted); }
+/* De to handlingsknapper staar sammen ude til hoejre, tilbage-knappen
+   alene til venstre. */
+.titelrad > button:nth-child(2) { margin-left: auto; }
+.titelrad .fjernknap { color: var(--muted); }
 .titelrad .fjernknap:hover { color: var(--danger, #b4462f); border-color: currentColor; }
 
 /* ------------------------------------------------ bogstaver i biblioteket */
@@ -2876,4 +2889,42 @@ button.version-linje.gammel:hover { text-decoration: underline; }
   .bogstavknap { font-size: 10px; padding: 1px 3px; opacity: .85; }
   /* Plads, saa skinnen aldrig daekker en titel. */
   .plakater { padding-right: 22px; }
+}
+
+/* ------------------------------------------ totrinsbekraeftelse (§9d) */
+
+/* QR-koden har sin egen hvide bund - den skal ikke arve temaets, for en
+   scanner kraever kontrast mellem moerke og lyse felter. Rammen giver den
+   luft, saa den ikke flyder sammen med kortet i lyst tema. */
+.totp-qr {
+  display: inline-block;
+  padding: 10px;
+  background: #fff;
+  border-radius: var(--r-sm);
+  margin: 8px 0;
+}
+.totp-qr svg { display: block; }
+
+/* Hemmeligheden skal kunne LAESES HOEJT og tastes ind paa en telefon -
+   derfor mellemrum mellem tegnene og en skrifttype uden tvivl om 0 og O. */
+.totp-hem {
+  display: inline-block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  letter-spacing: .12em;
+  word-break: break-all;
+  background: var(--card-hover);
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+}
+
+.totp-koder {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.7;
+  background: var(--card-hover);
+  padding: 10px 14px;
+  border-radius: var(--r-sm);
+  margin: 10px 0;
+  overflow-x: auto;
 }

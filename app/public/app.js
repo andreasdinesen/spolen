@@ -122,7 +122,7 @@ if (typeof module !== 'undefined' && module.exports) {
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 16;
+const APP_VERSION = 17;
 
 /* ---------------------------------------------------------------- tema */
 
@@ -192,6 +192,8 @@ const state = {
   settings: {},
   delte: {},
   tmdb: { besked: '' },
+  totp: { hentet: false },
+  passkeys: { hentet: false },
 };
 
 /* ------------------------------------------------------------- hjaelpere */
@@ -319,11 +321,74 @@ function loginSide(besked) {
           ? el('button', { class: 'btn ghost', text: 'Create account', onclick: () => send(true) })
           : null,
       ]),
+      /*
+       * Login med passkey. Vises kun, naar browseren FAKTISK kan det - uden
+       * https findes PublicKeyCredential slet ikke, og en knap, der kaster,
+       * er vaerre end ingen knap. Der er intet brugernavn at taste: browseren
+       * viser selv de noegler, den har til adressen.
+       */
+      (!cfg.needsSetup && cfg.secureContext && typeof window.PublicKeyCredential === 'function')
+        ? el('button', { class: 'btn ghost', style: 'margin-top:10px',
+            text: 'Sign in with a passkey', onclick: (e) => loginMedPasskey(e.target) })
+        : null,
       cfg.secureContext ? null : el('p', { class: 'dim lille', text:
         'Served over plain http — passkeys and notifications need https.' }),
     ])]));
   }
   tegn();
+}
+
+/*
+ * Login med en passkey - uden brugernavn.
+ *
+ * b64url-omregningen findes ogsaa i p4_settings.js. Den er den samme fem
+ * linjer, men de to steder moedes aldrig: login-siden vises FOER
+ * indstillingsfladen overhovedet er relevant, og at flytte hele
+ * opsaetningskoden herind for fem linjers skyld ville koste mere end det
+ * sparer.
+ *
+ * Det er HER en passkey-integration plejer at gaa galt: WebAuthn taler
+ * binaert, JSON goer ikke. base64 med + og / i stedet for - og _, eller
+ * glemt polstring, og saa siger browseren bare nej uden at forklare hvorfor.
+ */
+async function loginMedPasskey(knap) {
+  const tilBuf = (str) => {
+    const b64 = String(str).replace(/-/g, '+').replace(/_/g, '/');
+    const raa = atob(b64 + '==='.slice((b64.length + 3) % 4));
+    const ud = new Uint8Array(raa.length);
+    for (let i = 0; i < raa.length; i++) ud[i] = raa.charCodeAt(i);
+    return ud.buffer;
+  };
+  const tilB64 = (b) => {
+    const bytes = new Uint8Array(b);
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  };
+
+  knap.disabled = true;
+  const gammel = knap.textContent;
+  knap.textContent = 'Waiting for the device…';
+  try {
+    const start = await api('/passkeys/login/start', { method: 'POST', body: {} });
+    const pk = start.publicKey;
+    pk.challenge = tilBuf(pk.challenge);
+    const cred = await navigator.credentials.get({ publicKey: pk });
+    const r = await api('/passkeys/login/finish', { method: 'POST', body: {
+      challengeId: start.challengeId,
+      id: cred.id,
+      clientDataJSON: tilB64(cred.response.clientDataJSON),
+      authenticatorData: tilB64(cred.response.authenticatorData),
+      signature: tilB64(cred.response.signature),
+    } });
+    state.user = r.user;
+    await indlaes();
+  } catch (err) {
+    knap.disabled = false;
+    knap.textContent = gammel;
+    if (err && err.name === 'NotAllowedError') return;   // afbrudt af brugeren
+    toast(err.message || 'That passkey did not work.', 'fejl');
+  }
 }
 
 /* ---- p2_app.js ---- */
@@ -1656,6 +1721,10 @@ function settingsSide() {
 
     foldAfsnit('notifik', 'Notifications', null, notifikationAfsnit),
 
+    foldAfsnit('sikkerhed', 'Security', null, sikkerhedsAfsnit),
+
+    foldAfsnit('mcp', 'Claude connector', 'mcp', mcpAfsnit),
+
     foldAfsnit('noegler', 'Access keys', 'noegler', noegleAfsnit),
 
     admin ? foldAfsnit('server', 'This server', null, serverAfsnit) : null,
@@ -1818,6 +1887,341 @@ async function hentSettings() {
   state.delte = s.shared || {};
 }
 
+/* ------------------------------------------- totrinsbekraeftelse (§9d) */
+
+/*
+ * Sikkerhed: kodeord og totrinsbekraeftelse.
+ *
+ * Motoren har ligget i serveren fra begyndelsen - hemmelighed, engangskoder,
+ * genoprettelseskoder og andet trin ved login. Der manglede kun en vej til at
+ * taende den (Andreas, 2026-08-30).
+ */
+function sikkerhedsAfsnit() {
+  const t = state.totp;
+  if (!t || !t.hentet) {
+    hentTotp();
+    return el('p', { class: 'dim lille', text: 'Loading…' });
+  }
+  if (t.fejl) return el('p', { class: 'noeglestatus mangler', text: t.fejl });
+
+  /* Er opsaetningen i gang, fylder den hele afsnittet - man skal ikke kunne
+     starte forfra ved siden af sig selv. */
+  if (t.opsaetning) return totpOpsaetning(t);
+  if (t.koder) return totpKoder(t);
+
+  return el('div', {}, [
+    el('p', { class: t.enabled ? 'noeglestatus ok' : 'noeglestatus mangler',
+      text: t.enabled
+        ? `Two-factor is on. ${t.recoveryLeft} recovery ${t.recoveryLeft === 1 ? 'code' : 'codes'} left.`
+        : 'Two-factor is off.' }),
+    el('p', { class: 'dim lille', text: t.enabled
+      ? 'You are asked for a code from your phone when you sign in.'
+      : 'A code from your phone on top of your password. Works with any '
+        + 'authenticator app — the code is made on the phone, so it works without a network.' }),
+    t.enabled ? totpFraForm() : el('button', { class: 'btn primary', text: 'Turn on two-factor',
+      onclick: (e) => startTotp(e.target) }),
+    t.enabled ? totpNyeKoderForm() : null,
+    passkeyAfsnit(),
+  ]);
+}
+
+/* Billedet OG teksten. Sidder man ved telefonen og ser siden paa den samme
+   skaerm, kan en QR-kode ikke scannes - saa skal hemmeligheden kunne tastes. */
+function totpOpsaetning(t) {
+  const felt = el('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code',
+    placeholder: '000000', style: 'font-size:16px;max-width:140px' });
+  const qr = el('div', { class: 'totp-qr' });
+  qr.innerHTML = t.opsaetning.qr;      // vores egen SVG fra serveren
+
+  return el('div', {}, [
+    el('h3', { text: 'Scan this' }),
+    qr,
+    el('p', { class: 'dim lille', text: 'Cannot scan? Type this into the app instead:' }),
+    el('code', { class: 'totp-hem', text: t.opsaetning.secret }),
+    el('p', { class: 'lille', text:
+      'Then type the six digits the app shows, to prove it works before it is switched on.' }),
+    el('div', { class: 'knaprad' }, [
+      felt,
+      el('button', { class: 'btn primary', text: 'Turn on', onclick: async (e) => {
+        e.target.disabled = true;
+        try {
+          const r = await api('/2fa/enable', { method: 'POST', body: { code: felt.value } });
+          state.totp = Object.assign({}, state.totp, { opsaetning: null, koder: r.recovery, enabled: true });
+          tegnSide();
+        } catch (err) { e.target.disabled = false; toast(err.message, 'fejl'); }
+      } }),
+      el('button', { class: 'btn ghost', text: 'Cancel', onclick: () => {
+        state.totp = Object.assign({}, state.totp, { opsaetning: null });
+        tegnSide();
+      } }),
+    ]),
+  ]);
+}
+
+/*
+ * Koderne vises ÉN gang.
+ *
+ * De kan ikke hentes frem igen - kun erstattes af ti nye. Derfor staar det
+ * med rene ord, og listen kan koperes i ét stykke.
+ */
+function totpKoder(t) {
+  return el('div', { class: 'card advarsel' }, [
+    el('h3', { text: 'Save these recovery codes' }),
+    el('p', { class: 'lille', text:
+      'Each one works once, if you lose your phone. They are shown now and never again — '
+      + 'you can only replace them with ten new ones.' }),
+    el('pre', { class: 'totp-koder', text: t.koder.join('\n') }),
+    el('div', { class: 'knaprad' }, [
+      el('button', { class: 'btn ghost', text: 'Copy', onclick: async (e) => {
+        try { await navigator.clipboard.writeText(t.koder.join('\n')); toast('Copied.'); }
+        catch { toast('Could not copy — select the text instead.', 'fejl'); }
+      } }),
+      el('button', { class: 'btn primary', text: 'I have saved them', onclick: async () => {
+        state.totp = { hentet: false };
+        await hentTotp();
+        tegnSide();
+      } }),
+    ]),
+  ]);
+}
+
+/* Fra igen mod KODEORD - ikke mod en engangskode. Har man mistet telefonen,
+   ville et krav om en engangskode goere det umuligt at komme videre. */
+function totpFraForm() {
+  const felt = el('input', { type: 'password', autocomplete: 'current-password',
+    placeholder: 'Your password', style: 'font-size:16px' });
+  return el('div', { class: 'knaprad' }, [
+    felt,
+    el('button', { class: 'btn ghost', text: 'Turn off', onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        await api('/2fa', { method: 'DELETE', body: { password: felt.value } });
+        toast('Two-factor is off.');
+        state.totp = { hentet: false };
+        await hentTotp();
+        tegnSide();
+      } catch (err) { e.target.disabled = false; toast(err.message, 'fejl'); }
+    } }),
+  ]);
+}
+
+function totpNyeKoderForm() {
+  const felt = el('input', { type: 'password', autocomplete: 'current-password',
+    placeholder: 'Your password', style: 'font-size:16px' });
+  return el('details', { style: 'margin-top:12px' }, [
+    el('summary', { class: 'lille', text: 'Replace the recovery codes' }),
+    el('p', { class: 'dim lille', text:
+      'Ten new ones. The old ones stop working the moment these are made — also the unused.' }),
+    el('div', { class: 'knaprad' }, [
+      felt,
+      el('button', { class: 'btn ghost', text: 'Make new codes', onclick: async (e) => {
+        e.target.disabled = true;
+        try {
+          const r = await api('/2fa/recovery', { method: 'POST', body: { password: felt.value } });
+          state.totp = Object.assign({}, state.totp, { koder: r.recovery });
+          tegnSide();
+        } catch (err) { e.target.disabled = false; toast(err.message, 'fejl'); }
+      } }),
+    ]),
+  ]);
+}
+
+async function hentTotp() {
+  try {
+    const r = await api('/2fa');
+    state.totp = Object.assign({ hentet: true, fejl: '', opsaetning: null, koder: null }, r);
+  } catch (err) {
+    state.totp = { hentet: true, fejl: err.message };
+  }
+  tegnSide();
+}
+
+async function startTotp(knap) {
+  knap.disabled = true;
+  try {
+    const r = await api('/2fa/start', { method: 'POST', body: {} });
+    state.totp = Object.assign({}, state.totp, { opsaetning: r });
+    tegnSide();
+  } catch (err) { knap.disabled = false; toast(err.message, 'fejl'); }
+}
+
+/* ------------------------------------------------------ passkeys (§3) */
+
+/*
+ * Passkeys.
+ *
+ * Modulet har ligget faerdigt i app/webauthn.js fra begyndelsen, og
+ * `credentials`-tabellen kom med foerste migration - det var bare aldrig
+ * koblet til (Andreas, 2026-08-30).
+ *
+ * Uden https findes hverken PublicKeyCredential eller browserens
+ * noeglehaandtering. Det siges med rene ord i stedet for at vise en knap,
+ * der kaster.
+ */
+function passkeyAfsnit() {
+  const p = state.passkeys;
+  if (!p || !p.hentet) { hentPasskeys(); return el('p', { class: 'dim lille', text: 'Loading…' }); }
+
+  const kanBruges = typeof window.PublicKeyCredential === 'function'
+    && (window.isSecureContext !== false);
+
+  return el('div', { style: 'margin-top:18px' }, [
+    el('h3', { text: 'Passkeys' }),
+    el('p', { class: 'dim lille', text:
+      'Sign in with the fingerprint or face on your phone or laptop, instead of typing a '
+      + 'password. The key never leaves the device, and it only works on this address.' }),
+    p.fejl ? el('p', { class: 'noeglestatus mangler', text: p.fejl }) : null,
+    !kanBruges
+      ? el('p', { class: 'noeglestatus mangler', text:
+          'Passkeys need https and a browser that supports them.' })
+      : null,
+    p.liste && p.liste.length
+      ? el('div', { class: 'liste' }, p.liste.map((k) => el('div', { class: 'item-row' }, [
+          el('span', { class: 'lille', text: k.name || 'Passkey' }),
+          el('span', { class: 'dim lille', text: k.lastUsedAt
+            ? 'last used ' + new Date(k.lastUsedAt * 1000).toLocaleDateString('en-GB',
+                { day: 'numeric', month: 'short', year: 'numeric' })
+            : 'never used' }),
+          el('button', { class: 'btn ghost lille', text: 'Remove', onclick: async (e) => {
+            e.target.disabled = true;
+            try {
+              await api(`/passkeys/${encodeURIComponent(k.id)}`, { method: 'DELETE' });
+              state.passkeys = { hentet: false };
+              await hentPasskeys();
+            } catch (err) { e.target.disabled = false; toast(err.message, 'fejl'); }
+          } }),
+        ])))
+      : el('p', { class: 'dim lille', text: 'No passkeys yet.' }),
+    kanBruges
+      ? el('button', { class: 'btn', text: 'Add a passkey', onclick: (e) => tilfoejPasskey(e.target) })
+      : null,
+  ]);
+}
+
+async function hentPasskeys() {
+  try {
+    const r = await api('/passkeys');
+    state.passkeys = { hentet: true, fejl: '', liste: r.passkeys || [] };
+  } catch (err) {
+    state.passkeys = { hentet: true, fejl: err.message, liste: [] };
+  }
+  tegnSide();
+}
+
+/*
+ * base64url <-> ArrayBuffer.
+ *
+ * WebAuthn taler binaert, JSON goer ikke. Det er HER, en passkey-integration
+ * plejer at gaa galt: base64 med + og / i stedet for - og _, eller glemt
+ * polstring - og saa siger browseren bare nej uden at forklare hvorfor.
+ */
+function b64urlTilBuf(s) {
+  const b64 = String(s).replace(/-/g, '+').replace(/_/g, '/');
+  const raa = atob(b64 + '==='.slice((b64.length + 3) % 4));
+  const ud = new Uint8Array(raa.length);
+  for (let i = 0; i < raa.length; i++) ud[i] = raa.charCodeAt(i);
+  return ud.buffer;
+}
+
+function bufTilB64url(b) {
+  const bytes = new Uint8Array(b);
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function tilfoejPasskey(knap) {
+  knap.disabled = true;
+  const gammelTekst = knap.textContent;
+  knap.textContent = 'Waiting for the device…';
+  try {
+    const start = await api('/passkeys/register/start', { method: 'POST', body: {} });
+    const pk = start.publicKey;
+    pk.challenge = b64urlTilBuf(pk.challenge);
+    pk.user.id = b64urlTilBuf(pk.user.id);
+    for (const c of (pk.excludeCredentials || [])) c.id = b64urlTilBuf(c.id);
+
+    const cred = await navigator.credentials.create({ publicKey: pk });
+    await api('/passkeys/register/finish', { method: 'POST', body: {
+      challengeId: start.challengeId,
+      clientDataJSON: bufTilB64url(cred.response.clientDataJSON),
+      attestationObject: bufTilB64url(cred.response.attestationObject),
+      // Et navn man kan kende den paa, naar der ligger tre.
+      name: navigator.platform || 'This device',
+    } });
+    toast('Passkey added.');
+    state.passkeys = { hentet: false };
+    await hentPasskeys();
+  } catch (err) {
+    knap.disabled = false;
+    knap.textContent = gammelTekst;
+    // Afbryder man selv, er det ikke en fejl at raabe op om.
+    if (err && err.name === 'NotAllowedError') return;
+    toast(err.message || 'That did not work.', 'fejl');
+  }
+}
+
+/* ------------------------------------------------ Claude-connector (§9a) */
+
+/*
+ * MCP-serveren har koert siden F6 - men den stod kun naevnt som ÉN linje
+ * nede under "Access keys", og der er ingen, der finder den (Andreas,
+ * 2026-08-30). En funktion, ingen kan finde, er ikke leveret.
+ *
+ * Der er TO veje ind, og forskellen er vaerd at sige hoejt:
+ *
+ *   - claude.ai i browseren bruger OAuth. Man godkender i sin egen browser,
+ *     og der skifter ingen noegle haender.
+ *   - Claude Code og Desktop har ingen browser at godkende i og skal have en
+ *     adgangsnoegle med som Bearer-token.
+ */
+function mcpAfsnit() {
+  const adresse = `${location.origin}/mcp`;
+  const sikker = location.protocol === 'https:';
+
+  const felt = el('input', {
+    type: 'text', readonly: true, value: adresse,
+    style: 'font-size:16px;flex:1;min-width:0',
+    onclick: (e) => e.target.select(),
+  });
+
+  return el('div', {}, [
+    el('p', { class: 'dim lille', text:
+      'Let Claude look things up in your library and mark episodes watched — '
+      + '"what should I watch tonight?"' }),
+
+    el('label', { class: 'lille', text: 'Connector address' }),
+    el('div', { class: 'knaprad' }, [
+      felt,
+      el('button', { class: 'btn', text: 'Copy', onclick: async () => {
+        try { await navigator.clipboard.writeText(adresse); toast('Copied.'); }
+        catch {
+          // Uden clipboard-adgang (fx plain http) skal brugeren vide, at
+          // feltet er markeret i stedet - samme greb som ved adgangsnoegler.
+          felt.select();
+          toast('Could not copy — the address is selected, press Cmd/Ctrl+C.', 'fejl');
+        }
+      } }),
+    ]),
+
+    /*
+     * Uden https kan Claude slet ikke naa serveren. Det skal staa HER og
+     * ikke opdages, naar man har indsat adressen og faaet en fejl, man ikke
+     * kan tolke.
+     */
+    sikker ? null : el('p', { class: 'noeglestatus mangler', text:
+      'This address is plain http. Claude can only connect over https.' }),
+
+    el('p', { class: 'dim lille', text:
+      'On claude.ai: Settings → Connectors → Add custom connector. You approve it in your own '
+      + 'browser, so Claude only ever sees your library — no key changes hands.' }),
+    el('p', { class: 'dim lille', text:
+      'Claude Code and Desktop have no browser to approve in: make an access key below and send '
+      + 'it as a Bearer token instead.' }),
+    el('p', { class: 'dim lille', text: 'Press ? above for the full steps.' }),
+  ]);
+}
+
 /* ---- p5_titel.js ---- */
 
 /* ---------------------------------------------------------- titelvisning */
@@ -1857,6 +2261,7 @@ function titelSide() {
         onclick: () => { state.view = 'library'; tegnSide(); } }),
       // Kun paa noget, man FAKTISK har. Ellers ville knappen love at fjerne
       // en titel, der ikke er der.
+      t.data.tracking && titel.kind === 'tv' ? skjulFraUpNext(t.data) : null,
       t.data.tracking ? fjernFraBiblioteket(t.data) : null,
     ]),
     el('div', { class: 'titelhoved' }, [
@@ -2069,6 +2474,48 @@ async function genindlaesTitel(titleId) {
   state.titel.beslaegtede = beslaegtede;
   await Promise.all([hentUpNext(), hentBibliotek()]);
   tegnSide();
+}
+
+/*
+ * Tag en serie ud af Up Next uden at fjerne den.
+ *
+ * Andreas, 2026-08-30: nogle serier er man holdt op med at se, men man vil
+ * stadig kunne se hvor langt man naaede. Up Next er "hvad skal jeg se nu" -
+ * en serie, man ikke er i gang med, goer listen laengere uden at goere den
+ * mere brugbar.
+ *
+ * Tilstanden `paused` FANDTES i forvejen: Up Next viser kun `watching` og
+ * `watchlist`, saa der skulle ingen ny model til - kun en vej til at saette
+ * den. Historikken, fremdriften og selve titlen bliver praecis hvor de er.
+ */
+function skjulFraUpNext(d) {
+  const skjult = d.tracking.state === 'paused';
+  return el('button', {
+    class: 'btn ghost lille',
+    text: skjult ? 'Show in Up Next' : 'Hide from Up Next',
+    title: skjult
+      ? 'Put this series back on Up Next'
+      : 'Keep the series and its history, but stop it showing on Up Next',
+    onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        /*
+         * HELE tracking-objektet sendes med, ikke kun det aendrede felt.
+         * gemItem skriver `data` som ét stykke, saa et delvist objekt ville
+         * slette resten - fx hideSpecials og hvornaar man begyndte.
+         */
+        await api('/items', { method: 'POST', body: Object.assign({}, d.tracking, {
+          state: skjult ? 'watching' : 'paused',
+        }) });
+        toast(skjult ? 'Back on Up Next.' : 'Hidden from Up Next.');
+        await Promise.all([hentUpNext(), hentBibliotek()]);
+        await aabnTitel(d.title.id);
+      } catch (err) {
+        e.target.disabled = false;
+        toast(err.message, 'fejl');
+      }
+    },
+  });
 }
 
 /*
@@ -4061,6 +4508,21 @@ const HJAELP = {
       + 'needs. It gives access to your Plex account, so treat it like a password. spolen '
       + 'keeps it server-side and never sends it back to the browser, and you can always '
       + 'revoke it by signing out of all devices in your Plex account settings.',
+  },
+
+  mcp: {
+    titel: 'Connecting Claude to spolen',
+    url: 'https://claude.ai/settings/connectors',
+    trin: [
+      'On claude.ai: open Settings → Connectors → Add custom connector, and paste the address below.',
+      'Claude opens a spolen page in your browser and asks you to approve. You sign in as yourself, '
+        + 'so Claude only ever sees YOUR library — no key changes hands.',
+      'In Claude Code or Claude Desktop there is no browser to approve in. Make an access key under '
+        + '"Access keys" instead, and add spolen as an MCP server with the key as a Bearer token.',
+      'Ask things like "what should I watch tonight?" or "mark episode 4 of Silo as watched".',
+    ],
+    note: 'The connector needs https — Claude cannot reach a plain http address. '
+      + 'You can revoke it at any time under Access keys.',
   },
 
   noegler: {

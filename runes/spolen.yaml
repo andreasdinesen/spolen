@@ -6,7 +6,7 @@ gameskill:
     Henter metadata fra TMDB, viser hvor titlen kan streames, importerer historik fra Trakt, Plex, Letterboxd og Netflix,
     og deler praecis det, du vaelger, med resten af husstanden. Egen SQLite-database, ingen eksterne afhaengigheder.
   author: andreas
-  version: 16
+  version: 17
   icon: app
   docker:
     image: '{{NODE_IMAGE}}'
@@ -23,9 +23,9 @@ gameskill:
     hint: Skal vaere et node:-image, fx node:24-alpine
   install:
     image: '{{NODE_IMAGE}}'
-    script: "set -eu\necho \"Installerer spolen v16 ...\"\necho \"Node: $(node --version)\"\n\necho \"Henter app-koden fra\
+    script: "set -eu\necho \"Installerer spolen v17 ...\"\necho \"Node: $(node --version)\"\n\necho \"Henter app-koden fra\
       \ GitHub ...\"\nrm -rf /tmp/spolen-hent\nmkdir -p /tmp/spolen-hent\nnode -e 'const https=require(\"https\"),zlib=require(\"\
-      zlib\");const U=\"https://codeload.github.com/andreasdinesen/spolen/tar.gz/refs/tags/v16\";function d(m){console.error(\"\
+      zlib\");const U=\"https://codeload.github.com/andreasdinesen/spolen/tar.gz/refs/tags/v17\";function d(m){console.error(\"\
       [fejl] \"+m);console.error(\"Adresse: \"+U);console.error(\"Repoet er offentligt, saa en 404 betyder, at adressen ikke\
       \ findes - tjek at taggen er pushet.\");process.exit(1);}function hent(u,n){const h={\"user-agent\":\"spolen-installer\"\
       };https.get(u,{headers:h},(r)=>{if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){if(n<=0)return d(\"for mange\
@@ -41,9 +41,9 @@ gameskill:
   update:
     image: '{{NODE_IMAGE}}'
     label: Opdater spolen
-    script: "set -eu\necho \"Opdaterer spolen til v16 ...\"\necho \"Node: $(node --version)\"\n\necho \"Henter app-koden fra\
+    script: "set -eu\necho \"Opdaterer spolen til v17 ...\"\necho \"Node: $(node --version)\"\n\necho \"Henter app-koden fra\
       \ GitHub ...\"\nrm -rf /tmp/spolen-hent\nmkdir -p /tmp/spolen-hent\nnode -e 'const https=require(\"https\"),zlib=require(\"\
-      zlib\");const U=\"https://codeload.github.com/andreasdinesen/spolen/tar.gz/refs/tags/v16\";function d(m){console.error(\"\
+      zlib\");const U=\"https://codeload.github.com/andreasdinesen/spolen/tar.gz/refs/tags/v17\";function d(m){console.error(\"\
       [fejl] \"+m);console.error(\"Adresse: \"+U);console.error(\"Repoet er offentligt, saa en 404 betyder, at adressen ikke\
       \ findes - tjek at taggen er pushet.\");process.exit(1);}function hent(u,n){const h={\"user-agent\":\"spolen-installer\"\
       };https.get(u,{headers:h},(r)=>{if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){if(n<=0)return d(\"for mange\
