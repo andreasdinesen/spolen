@@ -500,3 +500,117 @@ async function hentBibliotek() {
   const svar = await api('/library');
   state.bibliotek.raekker = svar.rows || [];
 }
+
+/* ------------------------------------------------------------- historik */
+
+/*
+ * Hvad man SIDST har set - modstykket til Up Next (Andreas, 2026-08-31).
+ *
+ * Grupperet efter DAG. En flad liste med et klokkeslaet pr. raekke svarer
+ * ikke paa "hvornaar" - man skal selv laese datoer og finde skiftene. Med en
+ * overskrift pr. dag ser man det med det samme, og en aftens seance staar
+ * samlet.
+ */
+function historikSide() {
+  const h = state.historik;
+  if (!h.hentet) { hentHistorik(); return el('p', { class: 'dim', text: 'Loading…' }); }
+  if (h.fejl) return el('p', { class: 'noeglestatus mangler', text: h.fejl });
+  if (!h.raekker.length) {
+    return tomtRum('Nothing watched yet',
+      'Mark an episode or a film as watched, and it shows up here.');
+  }
+
+  /*
+   * Dagen udregnes i den LOKALE tidszone, ikke i UTC.
+   *
+   * Ser man et afsnit klokken 23 dansk tid om vinteren, er det stadig samme
+   * dag - men UTC-datoen ville sige i morgen. En historik, hvor aftenen
+   * flytter sig en dag frem, er svaer at stole paa.
+   */
+  const dagFor = (epoke) => {
+    const d = new Date(epoke * 1000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  const grupper = [];
+  for (const r of h.raekker) {
+    const dag = dagFor(r.watchedAt);
+    if (!grupper.length || grupper[grupper.length - 1].dag !== dag) grupper.push({ dag, raekker: [] });
+    grupper[grupper.length - 1].raekker.push(r);
+  }
+
+  return el('div', { class: 'bredside' }, [
+    el('div', { class: 'sidehoved' }, [
+      el('h1', { text: 'History' }),
+      el('span', { class: 'dim lille', text: h.raekker.length === 1
+        ? '1 viewing' : `${h.raekker.length} viewings` }),
+    ]),
+    ...grupper.map((g) => el('div', {}, [
+      el('div', { class: 'bogstavhoved', text: dagOverskrift(g.dag, h.today) }),
+      el('div', { class: 'kortliste' }, g.raekker.map(historikKort)),
+    ])),
+    /* Loftet er 200. Er der flere, skal det siges - ellers tror man, at det
+       er alt, hvad man har set. */
+    h.raekker.length >= 200
+      ? el('p', { class: 'dim lille', text:
+          'Showing the 200 most recent. Older entries are still counted under Statistics.' })
+      : null,
+  ]);
+}
+
+/* "Today" og "Yesterday" i stedet for datoer, man skal regne paa. */
+function dagOverskrift(dag, idag) {
+  if (dag === idag) return 'Today';
+  const d = new Date(`${dag}T12:00:00`);
+  const iGaar = new Date(`${idag}T12:00:00`);
+  iGaar.setDate(iGaar.getDate() - 1);
+  if (d.toDateString() === iGaar.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function historikKort(r) {
+  const t = r.title;
+  const e = r.episode;
+  const tid = new Date(r.watchedAt * 1000)
+    .toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+  return el('article', { class: 'naeste-kort card' }, [
+    el('button', { class: 'plakatknap', title: `Open ${t.name}`, onclick: () => aabnTitel(t.id) }, [
+      t.posterPath
+        ? el('img', { class: 'plakat', src: `/api/poster/w342${t.posterPath}`, alt: '', loading: 'lazy' })
+        : el('div', { class: 'plakat' }),
+    ]),
+    el('div', {}, [
+      el('h3', {}, [
+        el('button', { class: 'afsnitslink', text: t.name, title: `Open ${t.name}`,
+          onclick: () => aabnTitel(t.id) }),
+      ]),
+      e
+        ? el('button', { class: 'afsnitsmaerke afsnitslink',
+            text: `S${e.season}E${e.number}${e.name ? ' · ' + e.name : ''}`,
+            title: 'Show the episode description',
+            onclick: () => visAfsnit(e.id) })
+        : el('div', { class: 'dim lille', text: `Film${t.year ? ' · ' + t.year : ''}` }),
+      el('div', { class: 'kortbund' }, [
+        el('span', { class: 'chip neutral', text: tid }),
+        /*
+         * Kilden staar med, fordi den forklarer overraskelser: en raekke, man
+         * ikke selv satte, kom fra Plex eller en import - og saa er det ikke
+         * appen, der har fundet paa noget.
+         */
+        r.source && r.source !== 'manual'
+          ? el('span', { class: 'dim lille', text: r.source })
+          : null,
+      ]),
+    ]),
+  ]);
+}
+
+async function hentHistorik() {
+  try {
+    const svar = await api('/history?limit=200');
+    state.historik = { hentet: true, fejl: '', raekker: svar.rows || [], today: svar.today };
+  } catch (err) {
+    state.historik = { hentet: true, fejl: err.message, raekker: [] };
+  }
+}

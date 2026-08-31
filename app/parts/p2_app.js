@@ -29,6 +29,8 @@ const IKONER = {
   // Stablede kort - biblioteket.
   library: '<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="12" y="4" width="4" height="16" rx="1.5"/><path d="M18.5 5.5l2.2 14"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  // Ur med en pil tilbage - det, der ER set.
+  history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3 4v4h4"/><path d="M12 7.5V12l3 1.8"/>',
   // Soejler - statistik.
   stats: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   // To personer - deling.
@@ -85,6 +87,7 @@ function tilslutNav() {
 const SIDER = [
   { id: 'up-next', navn: 'Up Next' },
   { id: 'library', navn: 'Library' },
+  { id: 'history', navn: 'History' },
   { id: 'calendar', navn: 'Calendar' },
   { id: 'stats', navn: 'Statistics' },
   { id: 'sharing', navn: 'Sharing' },
@@ -181,6 +184,7 @@ function skal(indhold) {
         // Noeglens tilstand hentes, naar man aabner siden - ikke ved login.
         // Det er et rigtigt TMDB-kald, og det skal ikke koere hver gang.
         if (s.id === 'settings') { await Promise.all([hentSettings(), tjekTmdb(), hentTjenester(), hentNoegler(), hentPlexWebhook(), hentPush()]); tegnSide(); }
+        if (s.id === 'history') { await hentHistorik(); tegnSide(); }
         if (s.id === 'calendar') { await hentKalender(); tegnSide(); }
         if (s.id === 'stats') { await hentStats(); tegnSide(); }
         // Paa en telefon skal menuen lukke sig selv, naar man har valgt.
@@ -702,6 +706,7 @@ function tegnSide() {
   if (state.view === 'up-next') { skal(upNextSide()); return; }
   if (state.view === 'library') { skal(bibliotekSide()); return; }
   if (state.view === 'title') { skal(titelSide()); return; }
+  if (state.view === 'history') { skal(historikSide()); return; }
   if (state.view === 'settings') { skal(settingsSide()); return; }
   if (state.view === 'calendar') { skal(kalenderSide()); return; }
   if (state.view === 'stats') { skal(statsSide()); return; }

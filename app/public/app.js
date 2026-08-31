@@ -122,7 +122,7 @@ if (typeof module !== 'undefined' && module.exports) {
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 17;
+const APP_VERSION = 18;
 
 /* ---------------------------------------------------------------- tema */
 
@@ -194,6 +194,7 @@ const state = {
   tmdb: { besked: '' },
   totp: { hentet: false },
   passkeys: { hentet: false },
+  historik: { hentet: false, fejl: '', raekker: [] },
 };
 
 /* ------------------------------------------------------------- hjaelpere */
@@ -423,6 +424,8 @@ const IKONER = {
   // Stablede kort - biblioteket.
   library: '<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="12" y="4" width="4" height="16" rx="1.5"/><path d="M18.5 5.5l2.2 14"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  // Ur med en pil tilbage - det, der ER set.
+  history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3 4v4h4"/><path d="M12 7.5V12l3 1.8"/>',
   // Soejler - statistik.
   stats: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   // To personer - deling.
@@ -479,6 +482,7 @@ function tilslutNav() {
 const SIDER = [
   { id: 'up-next', navn: 'Up Next' },
   { id: 'library', navn: 'Library' },
+  { id: 'history', navn: 'History' },
   { id: 'calendar', navn: 'Calendar' },
   { id: 'stats', navn: 'Statistics' },
   { id: 'sharing', navn: 'Sharing' },
@@ -575,6 +579,7 @@ function skal(indhold) {
         // Noeglens tilstand hentes, naar man aabner siden - ikke ved login.
         // Det er et rigtigt TMDB-kald, og det skal ikke koere hver gang.
         if (s.id === 'settings') { await Promise.all([hentSettings(), tjekTmdb(), hentTjenester(), hentNoegler(), hentPlexWebhook(), hentPush()]); tegnSide(); }
+        if (s.id === 'history') { await hentHistorik(); tegnSide(); }
         if (s.id === 'calendar') { await hentKalender(); tegnSide(); }
         if (s.id === 'stats') { await hentStats(); tegnSide(); }
         // Paa en telefon skal menuen lukke sig selv, naar man har valgt.
@@ -1096,6 +1101,7 @@ function tegnSide() {
   if (state.view === 'up-next') { skal(upNextSide()); return; }
   if (state.view === 'library') { skal(bibliotekSide()); return; }
   if (state.view === 'title') { skal(titelSide()); return; }
+  if (state.view === 'history') { skal(historikSide()); return; }
   if (state.view === 'settings') { skal(settingsSide()); return; }
   if (state.view === 'calendar') { skal(kalenderSide()); return; }
   if (state.view === 'stats') { skal(statsSide()); return; }
@@ -1661,6 +1667,120 @@ function bibliotekKort(raekke) {
 async function hentBibliotek() {
   const svar = await api('/library');
   state.bibliotek.raekker = svar.rows || [];
+}
+
+/* ------------------------------------------------------------- historik */
+
+/*
+ * Hvad man SIDST har set - modstykket til Up Next (Andreas, 2026-08-31).
+ *
+ * Grupperet efter DAG. En flad liste med et klokkeslaet pr. raekke svarer
+ * ikke paa "hvornaar" - man skal selv laese datoer og finde skiftene. Med en
+ * overskrift pr. dag ser man det med det samme, og en aftens seance staar
+ * samlet.
+ */
+function historikSide() {
+  const h = state.historik;
+  if (!h.hentet) { hentHistorik(); return el('p', { class: 'dim', text: 'Loading…' }); }
+  if (h.fejl) return el('p', { class: 'noeglestatus mangler', text: h.fejl });
+  if (!h.raekker.length) {
+    return tomtRum('Nothing watched yet',
+      'Mark an episode or a film as watched, and it shows up here.');
+  }
+
+  /*
+   * Dagen udregnes i den LOKALE tidszone, ikke i UTC.
+   *
+   * Ser man et afsnit klokken 23 dansk tid om vinteren, er det stadig samme
+   * dag - men UTC-datoen ville sige i morgen. En historik, hvor aftenen
+   * flytter sig en dag frem, er svaer at stole paa.
+   */
+  const dagFor = (epoke) => {
+    const d = new Date(epoke * 1000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  const grupper = [];
+  for (const r of h.raekker) {
+    const dag = dagFor(r.watchedAt);
+    if (!grupper.length || grupper[grupper.length - 1].dag !== dag) grupper.push({ dag, raekker: [] });
+    grupper[grupper.length - 1].raekker.push(r);
+  }
+
+  return el('div', { class: 'bredside' }, [
+    el('div', { class: 'sidehoved' }, [
+      el('h1', { text: 'History' }),
+      el('span', { class: 'dim lille', text: h.raekker.length === 1
+        ? '1 viewing' : `${h.raekker.length} viewings` }),
+    ]),
+    ...grupper.map((g) => el('div', {}, [
+      el('div', { class: 'bogstavhoved', text: dagOverskrift(g.dag, h.today) }),
+      el('div', { class: 'kortliste' }, g.raekker.map(historikKort)),
+    ])),
+    /* Loftet er 200. Er der flere, skal det siges - ellers tror man, at det
+       er alt, hvad man har set. */
+    h.raekker.length >= 200
+      ? el('p', { class: 'dim lille', text:
+          'Showing the 200 most recent. Older entries are still counted under Statistics.' })
+      : null,
+  ]);
+}
+
+/* "Today" og "Yesterday" i stedet for datoer, man skal regne paa. */
+function dagOverskrift(dag, idag) {
+  if (dag === idag) return 'Today';
+  const d = new Date(`${dag}T12:00:00`);
+  const iGaar = new Date(`${idag}T12:00:00`);
+  iGaar.setDate(iGaar.getDate() - 1);
+  if (d.toDateString() === iGaar.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function historikKort(r) {
+  const t = r.title;
+  const e = r.episode;
+  const tid = new Date(r.watchedAt * 1000)
+    .toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+  return el('article', { class: 'naeste-kort card' }, [
+    el('button', { class: 'plakatknap', title: `Open ${t.name}`, onclick: () => aabnTitel(t.id) }, [
+      t.posterPath
+        ? el('img', { class: 'plakat', src: `/api/poster/w342${t.posterPath}`, alt: '', loading: 'lazy' })
+        : el('div', { class: 'plakat' }),
+    ]),
+    el('div', {}, [
+      el('h3', {}, [
+        el('button', { class: 'afsnitslink', text: t.name, title: `Open ${t.name}`,
+          onclick: () => aabnTitel(t.id) }),
+      ]),
+      e
+        ? el('button', { class: 'afsnitsmaerke afsnitslink',
+            text: `S${e.season}E${e.number}${e.name ? ' · ' + e.name : ''}`,
+            title: 'Show the episode description',
+            onclick: () => visAfsnit(e.id) })
+        : el('div', { class: 'dim lille', text: `Film${t.year ? ' · ' + t.year : ''}` }),
+      el('div', { class: 'kortbund' }, [
+        el('span', { class: 'chip neutral', text: tid }),
+        /*
+         * Kilden staar med, fordi den forklarer overraskelser: en raekke, man
+         * ikke selv satte, kom fra Plex eller en import - og saa er det ikke
+         * appen, der har fundet paa noget.
+         */
+        r.source && r.source !== 'manual'
+          ? el('span', { class: 'dim lille', text: r.source })
+          : null,
+      ]),
+    ]),
+  ]);
+}
+
+async function hentHistorik() {
+  try {
+    const svar = await api('/history?limit=200');
+    state.historik = { hentet: true, fejl: '', raekker: svar.rows || [], today: svar.today };
+  } catch (err) {
+    state.historik = { hentet: true, fejl: err.message, raekker: [] };
+  }
 }
 
 /* ---- p4_settings.js ---- */

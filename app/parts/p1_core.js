@@ -11,7 +11,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 17;
+const APP_VERSION = 18;
 
 /* ---------------------------------------------------------------- tema */
 
@@ -83,6 +83,7 @@ const state = {
   tmdb: { besked: '' },
   totp: { hentet: false },
   passkeys: { hentet: false },
+  historik: { hentet: false, fejl: '', raekker: [] },
 };
 
 /* ------------------------------------------------------------- hjaelpere */

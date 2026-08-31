@@ -4048,6 +4048,58 @@ const ROUTES = {
     });
   },
 
+  /*
+   * Historikken: hvad man har set, og hvornaar.
+   *
+   * Modstykket til Up Next (Andreas, 2026-08-31). `GET /api/watches` sender
+   * raa raekker - titel-id og afsnits-id - og fladen skulle saa slaa hvert
+   * navn op for sig. Her sker sammenstillingen ét sted.
+   *
+   * Kun de FELTER, der skal vises. `titles.data` er en hel TMDB-post, og at
+   * sende den pr. visning ville vaere de megabytes i en liste, Kokkeri laerte
+   * at holde ude (§4) - 200 visninger ville blive mange megabyte for at vise
+   * et navn og et nummer.
+   *
+   * Titler og afsnit slaas op ÉN gang hver, ikke én gang pr. visning: ser man
+   * ti afsnit af samme serie, er det ét opslag, ikke ti.
+   */
+  'GET /api/history': (req, res, ctx) => {
+    const g = godkend(req, res, 'read');
+    if (!g) return;
+    const graense = Math.min(Math.max(Number(ctx.query.get('limit')) || 200, 1), 1000);
+    const raa = hentWatches(g.user.id, {
+      fra: ctx.query.get('from') || undefined,
+      til: ctx.query.get('to') || undefined,
+      graense,
+    });
+
+    const titler = new Map();
+    const afsnit = new Map();
+    const raekker = [];
+    for (const w of raa) {
+      if (!titler.has(w.titleId)) titler.set(w.titleId, hentTitel(w.titleId));
+      const t = titler.get(w.titleId);
+      if (!t) continue;                    // titlen er ryddet ud af cachen
+
+      let e = null;
+      if (w.episodeId) {
+        if (!afsnit.has(w.episodeId)) afsnit.set(w.episodeId, hentEtAfsnit(w.episodeId));
+        const a = afsnit.get(w.episodeId);
+        // Uden resuméet - det er dét, der goer et listesvar tungt.
+        if (a) e = { id: a.id, season: a.season, number: a.number, name: a.name };
+      }
+
+      raekker.push({
+        id: w.id,
+        watchedAt: w.watchedAt,
+        source: w.source,
+        title: { id: t.id, kind: t.kind, name: t.name, year: t.year, posterPath: t.posterPath || null },
+        episode: e,
+      });
+    }
+    sendJson(res, 200, { today: beregn.isoDato(now()), rows: raekker });
+  },
+
   'POST /api/watches': async (req, res) => {
     const g = godkend(req, res, 'write');
     if (!g) return;
