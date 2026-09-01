@@ -412,6 +412,7 @@ function bibliotekSide() {
     el('div', { class: 'sidehoved' }, [
       el('h1', { text: 'Library' }),
       el('span', { class: 'dim lille', text: raekker.length === 1 ? '1 title' : `${raekker.length} titles` }),
+      ryddeKnap(alle),
       kompaktKnap(),
     ]),
     flige.length > 1 ? el('div', { class: 'omni-chips bibliotekflige' }, flige) : null,
@@ -422,6 +423,129 @@ function bibliotekSide() {
     // dokumentet - den er ude af flowet alligevel.
     grupper.length > 1 ? bogstavSkinne(grupper) : null,
   ]);
+}
+
+/*
+ * Titler man foelger UDEN at have set noget af dem.
+ *
+ * Udregnes af det, biblioteket ALLEREDE har hentet - `progress` for serier,
+ * `watched` for film - saa knappen kan vide, om der er noget at rydde op i,
+ * uden et ekstra kald ved hver sideindlaesning.
+ */
+function useteTitler(alle, kunSerier) {
+  return alle.filter((r) => {
+    if (kunSerier && r.title.kind !== 'tv') return false;
+    return r.title.kind === 'tv' ? !(r.progress && r.progress.sete > 0) : !r.watched;
+  });
+}
+
+/*
+ * Ryd op i biblioteket.
+ *
+ * Knappen vises kun, naar der ER noget at rydde - ellers er den bare en
+ * knap, der siger "nul".
+ */
+function ryddeKnap(alle) {
+  const kandidater = useteTitler(alle, false);
+  if (!kandidater.length) return null;
+  return el('button', {
+    class: 'btn ghost lille',
+    text: `Tidy up (${kandidater.length})`,
+    title: 'Remove titles you follow but have not watched anything of',
+    onclick: () => visOprydning(alle),
+  });
+}
+
+/*
+ * Oprydningen, med listen FOER handlingen.
+ *
+ * En knap, der fjerner hundredvis af titler paa ét tryk, skal vise hvad den
+ * tager. Det er ikke til at huske, hvad der stod i biblioteket, og en
+ * fortrydelse findes ikke - de skal tilfoejes én ad gangen igen.
+ *
+ * Importen gav ALLE serier tilstanden `watchlist`, uanset om de kom fra
+ * oenskelisten eller samlingen, saa tilstanden kan ikke skelne. Det, der KAN
+ * skelnes paa, er hvor markeringen kom fra - derfor staar `source` med.
+ */
+function visOprydning(alle) {
+  let kunSerier = true;
+  const bag = el('div', { class: 'modalbag', onclick: (e) => { if (e.target === bag) luk(); } });
+  const luk = () => { bag.remove(); document.removeEventListener('keydown', paaTast); };
+  const paaTast = (e) => { if (e.key === 'Escape') luk(); };
+
+  const kort = el('div', { class: 'modal-card oprydning', role: 'dialog', 'aria-modal': 'true' });
+  const tegn = () => {
+    const liste = useteTitler(alle, kunSerier);
+    kort.textContent = '';
+    /*
+     * FILTRÉR null'erne fra.
+     *
+     * el() springer tomme boern over, men DOM'ens egen append() laver `null`
+     * om til TEKSTEN "null" - og saa staar der bogstaveligt "null" paa
+     * skaermen. Fanget paa et skaermbillede; ingen af de strukturelle
+     * proever saa det, fordi de kun kiggede paa .item-row og <p>
+     * (2026-09-01).
+     */
+    kort.append(...[
+      el('h3', { text: 'Tidy up your library' }),
+      el('p', { class: 'dim lille', text:
+        'These are titles you follow but have not watched anything of. Removing them leaves '
+        + 'no history behind — there is none. You can add any of them again later.' }),
+      el('label', { class: 'lille', style: 'display:flex;gap:8px;align-items:center;margin:10px 0' }, [
+        (() => {
+          const b = el('input', { type: 'checkbox' });
+          b.checked = kunSerier;
+          b.addEventListener('change', () => { kunSerier = b.checked; tegn(); });
+          return b;
+        })(),
+        el('span', { text: 'Series only (leave films alone)' }),
+      ]),
+      el('p', { class: liste.length ? 'chip klar' : 'dim',
+        text: liste.length === 1 ? '1 title will be removed' : `${liste.length} titles will be removed` }),
+      el('div', { class: 'liste oprydningsliste' }, liste.slice(0, 400).map((r) => el('div', { class: 'item-row' }, [
+        el('span', { class: 'lille', text: r.title.name }),
+        el('span', { class: 'dim lille', text: [
+          r.title.kind === 'tv' ? 'series' : 'film',
+          r.tracking && r.tracking.source === 'import' ? 'from the import' : null,
+        ].filter(Boolean).join(' · ') }),
+      ]))),
+      liste.length > 400
+        ? el('p', { class: 'dim lille', text: `…and ${liste.length - 400} more. All of them will be removed.` })
+        : null,
+      el('div', { class: 'knaprad' }, [
+        el('button', { class: 'btn primary', disabled: !liste.length,
+          text: `Remove ${liste.length}`,
+          onclick: async (e) => { e.target.disabled = true; await ryd(liste, luk); } }),
+        el('button', { class: 'btn ghost', text: 'Cancel', onclick: luk }),
+      ]),
+    ].filter(Boolean));
+  };
+
+  tegn();
+  bag.appendChild(kort);
+  document.body.appendChild(bag);
+  document.addEventListener('keydown', paaTast);
+}
+
+async function ryd(liste, luk) {
+  try {
+    const svar = await api('/library/cleanup', { method: 'POST',
+      body: { titleIds: liste.map((r) => r.title.id) } });
+    luk();
+    /*
+     * Serveren springer titler over, der HAR faaet en visning imens - fx
+     * fra Plex. Det skal siges, ikke skjules: ellers undrer man sig over,
+     * at tallet ikke passer.
+     */
+    const sprunget = (svar.sprunget || []).length;
+    toast(sprunget
+      ? `Removed ${svar.fjernet}. Kept ${sprunget} that had been watched in the meantime.`
+      : `Removed ${svar.fjernet}.`);
+    await Promise.all([hentUpNext(), hentBibliotek()]);
+    tegnSide();
+  } catch (err) {
+    toast(err.message, 'fejl');
+  }
 }
 
 /*

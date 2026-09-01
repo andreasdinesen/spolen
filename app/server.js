@@ -4049,6 +4049,55 @@ const ROUTES = {
   },
 
   /*
+   * Ryd op: fjern titler, man foelger UDEN at have set noget af dem.
+   *
+   * En Trakt-import tilfoejer alt, den moeder - ogsaa samlingen og
+   * oenskelisten - saa biblioteket fyldes med serier, man aldrig har set et
+   * afsnit af (Andreas, 2026-09-01: "en masse serier ... men ikke nogle sete
+   * afsnit").
+   *
+   * SERVEREN TJEKKER SELV, at hver titel er uset.
+   *
+   * Fladen sendte listen ud fra det, den havde hentet - og imellem at listen
+   * blev vist og knappen trykket, kan man have markeret noget set (eller en
+   * Plex-synkronisering kan). Uden tjekket her ville et forældet id fjerne
+   * en titel, man lige er begyndt paa. Derfor: en titel med ÉN visning
+   * springes over og rapporteres, i stedet for at blive fjernet.
+   */
+  'POST /api/library/cleanup': async (req, res) => {
+    const g = godkend(req, res, 'write');
+    if (!g) return;
+    const body = await readJsonBody(req);
+    const ider = Array.isArray(body.titleIds) ? body.titleIds.slice(0, 2000) : null;
+    if (!ider) { apiFejl(res, 400, 'bad_request', 'titleIds must be an array.'); return; }
+
+    let fjernet = 0;
+    const sprunget = [];
+    db.exec('BEGIN');
+    try {
+      for (const raa of ider) {
+        const titleId = str(raa, 64);
+        if (!titleId) continue;
+        // hentTracking filtrerer paa user_id - en andens titel findes slet ikke.
+        const tr = hentTracking(g.user.id, titleId);
+        if (!tr) continue;
+        if (hentWatches(g.user.id, { titleId, graense: 1 }).length) {
+          const t = hentTitel(titleId);
+          sprunget.push({ titleId, name: t ? t.name : titleId });
+          continue;
+        }
+        if (sletItem(g.user.id, tr.id)) fjernet++;
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    audit('bibliotek-ryddet', g.user.username, String(fjernet));
+    sendJson(res, 200, { ok: true, fjernet, sprunget });
+  },
+
+  /*
    * Historikken: hvad man har set, og hvornaar.
    *
    * Modstykket til Up Next (Andreas, 2026-08-31). `GET /api/watches` sender

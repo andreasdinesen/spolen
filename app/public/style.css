@@ -2928,3 +2928,8 @@ button.version-linje.gammel:hover { text-decoration: underline; }
   margin: 10px 0;
   overflow-x: auto;
 }
+
+/* Oprydningens liste kan vaere hundredvis lang - den skal rulle inde i
+   ruden, ikke goere ruden hoejere end skaermen. */
+.oprydning { max-width: 560px; }
+.oprydningsliste { max-height: 44vh; overflow-y: auto; margin: 10px 0; }
