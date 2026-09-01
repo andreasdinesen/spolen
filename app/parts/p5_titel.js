@@ -2,8 +2,23 @@
 /* ---------------------------------------------------------- titelvisning */
 
 async function aabnTitel(id) {
+  /*
+   * HUSK, hvor man kom fra.
+   *
+   * Tilbage-knappen sagde "← Library", uanset om man kom fra Up Next,
+   * History eller en soegning - og saa sender den én et andet sted hen, end
+   * den lover (Andreas, 2026-09-01).
+   *
+   * Gaar man fra én titel til en anden - via samlingen eller de beslaegtede -
+   * BEVARES den oprindelige kilde. Ellers ville "tilbage" foere til den
+   * forrige titel, og man kunne ikke komme hjem uden at trykke mange gange.
+   */
+  const fra = state.view === 'title'
+    ? (state.titel && state.titel.fra) || 'library'
+    : state.view;
+
   state.view = 'title';
-  state.titel = { id, data: null, fejl: '', aabne: new Set(), beslaegtede: null };
+  state.titel = { id, data: null, fejl: '', aabne: new Set(), beslaegtede: null, fra };
   tegnSide();
   try {
     state.titel.data = await api(`/titles/${encodeURIComponent(id)}`);
@@ -32,8 +47,7 @@ function titelSide() {
 
   return el('div', {}, [
     el('div', { class: 'titelrad' }, [
-      el('button', { class: 'btn ghost lille', text: '← Library',
-        onclick: () => { state.view = 'library'; tegnSide(); } }),
+      ...tilbageKnapper(t.fra),
       // Kun paa noget, man FAKTISK har. Ellers ville knappen love at fjerne
       // en titel, der ikke er der.
       t.data.tracking && titel.kind === 'tv' ? skjulFraUpNext(t.data) : null,
@@ -249,6 +263,38 @@ async function genindlaesTitel(titleId) {
   state.titel.beslaegtede = beslaegtede;
   await Promise.all([hentUpNext(), hentBibliotek()]);
   tegnSide();
+}
+
+/*
+ * Vejen tilbage.
+ *
+ * Den foerste knap er DÉR, man kom fra - ellers lover den ét og goer noget
+ * andet. Biblioteket staar ved siden af, naar man ikke kom derfra: det er
+ * det sted, man oftest vil videre til, og at skulle om ad venstremenuen for
+ * at komme til sin egen samling er et unoedigt skridt (Andreas, 2026-09-01).
+ */
+function tilbageKnapper(fra) {
+  const navne = { 'up-next': 'Up Next', library: 'Library', history: 'History',
+    calendar: 'Calendar', stats: 'Statistics', sharing: 'Sharing' };
+  const kilde = navne[fra] ? fra : 'library';
+
+  const knap = (id, primaer) => el('button', {
+    class: 'btn ghost lille',
+    text: `${primaer ? '← ' : ''}${navne[id]}`,
+    title: `Back to ${navne[id]}`,
+    onclick: async () => {
+      state.view = id;
+      tegnSide();
+      // Listerne kan vaere aendret af det, man lige gjorde inde paa titlen.
+      if (id === 'up-next') { await hentUpNext(); tegnSide(); }
+      if (id === 'library') { await hentBibliotek(); tegnSide(); }
+      if (id === 'history') { await hentHistorik(); tegnSide(); }
+    },
+  });
+
+  return kilde === 'library'
+    ? [knap('library', true)]
+    : [knap(kilde, true), knap('library', false)];
 }
 
 /*

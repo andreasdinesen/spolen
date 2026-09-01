@@ -101,12 +101,43 @@ test('det siges, hvad der kom fra importen', () => {
   assert.match(krop, /source === 'import'/, 'kilden vises ikke pr. titel');
 });
 
-test('film kan holdes udenfor', () => {
+/*
+ * DEN, JEG BLEV FANGET AF.
+ *
+ * Knappen taalte ALLE slags, ruden aabnede med "kun serier": hos Andreas
+ * sagde knappen 255 og ruden 0 (2026-09-01). To tal for det samme, der
+ * modsagde hinanden.
+ *
+ * Og det viste noget om dataene: alle hans 118 serier HAR et set afsnit. De
+ * 255 usete var film fra Trakt-samlingen - saa "kun serier" som standard
+ * gjorde funktionen ubrugelig netop dér, hvor der var noget at rydde.
+ *
+ * Kuren er ikke at rette det ene tal, men at binde dem til ÉN vaerdi.
+ */
+test('knappens tal og rudens tal kan ikke drive fra hinanden', () => {
+  assert.match(SOEG, /const OPRYDNING_KUN_SERIER = /,
+    'der er ingen faelles vaerdi - saa kan de to tal vaere forskellige igen');
+
+  const kn = SOEG.slice(SOEG.indexOf('function ryddeKnap'), SOEG.indexOf('\n}', SOEG.indexOf('function ryddeKnap')));
+  assert.match(kn, /useteTitler\(alle, OPRYDNING_KUN_SERIER\)/,
+    'knappen taeller efter sin egen regel');
+
+  const rude = SOEG.slice(SOEG.indexOf('function visOprydning'), SOEG.indexOf('\n}\n', SOEG.indexOf('function visOprydning')));
+  assert.match(rude, /let kunSerier = OPRYDNING_KUN_SERIER/,
+    'ruden aabner efter sin egen regel');
+
+  // Og de maa ikke have hver sin haardkodede vaerdi ved siden af.
+  assert.ok(!/useteTitler\(alle, (true|false)\)/.test(kn + rude),
+    'et af stederne bruger stadig en haardkodet vaerdi');
+});
+
+test('film kan holdes udenfor, men er MED fra start', () => {
   const i = SOEG.indexOf('function visOprydning');
   const krop = SOEG.slice(i, SOEG.indexOf('\n}\n', i));
-  assert.match(krop, /let kunSerier = true/,
-    '"kun serier" er ikke standarden - Andreas spurgte om SERIER');
-  assert.match(krop, /Series only/, 'valget vises ikke');
+  assert.match(SOEG, /const OPRYDNING_KUN_SERIER = false/,
+    'oprydningen aabner med kun serier - men en samlingsimport fylder '
+    + 'biblioteket med usete FILM, og saa er der intet at rydde');
+  assert.match(krop, /Series only/, 'valget til at indsnaevre vises ikke');
 });
 
 /*

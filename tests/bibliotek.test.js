@@ -175,3 +175,79 @@ test('en plakat i samlingen foerer hen til den titel', () => {
   assert.ok(antalStop >= 2,
     `kun ${antalStop} stopPropagation i samlingens kort - knapperne udloeser ogsaa kortets klik`);
 });
+
+/* ------------------------------------------------------ vejen tilbage */
+
+/*
+ * Tilbage-knappen sagde "← Library", uanset om man kom fra Up Next, History
+ * eller en soegning - og saa sender den én et andet sted hen, end den lover
+ * (Andreas, 2026-09-01).
+ */
+test('titelsiden husker, hvor man kom fra', () => {
+  const TITEL = fs.readFileSync(rod('app', 'parts', 'p5_titel.js'), 'utf8');
+  const i = TITEL.indexOf('async function aabnTitel');
+  const krop = TITEL.slice(i, TITEL.indexOf('\n  try {', i));
+
+  assert.match(krop, /const fra = state\.view === 'title'/,
+    'kilden gemmes ikke - saa kan knappen ikke sige sandheden');
+  assert.match(krop, /beslaegtede: null, fra \}/, 'kilden laegges ikke i state.titel');
+
+  /*
+   * Gaar man fra én titel til en anden - via samlingen eller de beslaegtede -
+   * skal den OPRINDELIGE kilde bevares. Ellers ville "tilbage" foere til den
+   * forrige titel, og man kunne ikke komme hjem uden mange tryk.
+   */
+  assert.match(krop, /\(state\.titel && state\.titel\.fra\) \|\| 'library'/,
+    'kilden bevares ikke, naar man gaar fra titel til titel');
+});
+
+/*
+ * At hjaelperen er RIGTIG er ikke nok - siden skal ogsaa BRUGE den.
+ *
+ * Maalt 2026-09-01: en sabotage, der satte den haardkodede "← Library"
+ * tilbage paa titelsiden, forblev groen. tilbageKnapper stod der jo stadig
+ * og saa fin ud; den blev bare ikke kaldt. Proever man kun hjaelperen,
+ * proever man ikke det, brugeren ser.
+ */
+test('titelsiden bruger tilbageKnapper - ikke en haardkodet knap', () => {
+  const TITEL = fs.readFileSync(rod('app', 'parts', 'p5_titel.js'), 'utf8');
+  const i = TITEL.indexOf("class: 'titelrad'");
+  assert.notStrictEqual(i, -1, 'titelraden findes ikke');
+  const rad = TITEL.slice(i, TITEL.indexOf(']),', i));
+
+  assert.match(rad, /\.\.\.tilbageKnapper\(t\.fra\)/,
+    'titelraden kalder ikke tilbageKnapper med kilden');
+  assert.ok(!/'← Library'/.test(rad),
+    'der staar en haardkodet "← Library" i titelraden - saa lyver den igen, '
+    + 'naar man kom fra Up Next');
+});
+
+test('der er vej tilbage BAADE til kilden og til biblioteket', () => {
+  const TITEL = fs.readFileSync(rod('app', 'parts', 'p5_titel.js'), 'utf8');
+  const i = TITEL.indexOf('function tilbageKnapper');
+  assert.notStrictEqual(i, -1, 'tilbageKnapper findes ikke');
+  const krop = TITEL.slice(i, TITEL.indexOf('\n}\n', i));
+
+  assert.match(krop, /'up-next': 'Up Next'/, 'Up Next kan ikke navngives');
+  assert.match(krop, /history: 'History'/, 'History kan ikke navngives');
+  // Kom man FRA biblioteket, ville en ekstra "Library" vaere den samme knap to gange.
+  assert.match(krop, /kilde === 'library'\s*\n?\s*\? \[knap\('library', true\)\]/,
+    'biblioteket faar to ens knapper, naar man kom derfra');
+  assert.match(krop, /\[knap\(kilde, true\), knap\('library', false\)\]/,
+    'der er ikke vej til BEGGE steder, naar man kom fra et tredje');
+
+  // En ukendt kilde maa falde tilbage paa noget, der findes.
+  assert.match(krop, /navne\[fra\] \? fra : 'library'/,
+    'en ukendt kilde giver en knap uden navn');
+});
+
+test('listerne hentes forfra, naar man gaar tilbage', () => {
+  const TITEL = fs.readFileSync(rod('app', 'parts', 'p5_titel.js'), 'utf8');
+  const i = TITEL.indexOf('function tilbageKnapper');
+  const krop = TITEL.slice(i, TITEL.indexOf('\n}\n', i));
+  /* Man kan lige have markeret et afsnit set - saa er Up Next foraeldet, og
+     titlen staar der stadig med det afsnit, man allerede har set. */
+  assert.match(krop, /hentUpNext\(\)/, 'Up Next hentes ikke forfra');
+  assert.match(krop, /hentBibliotek\(\)/, 'biblioteket hentes ikke forfra');
+  assert.match(krop, /hentHistorik\(\)/, 'historikken hentes ikke forfra');
+});

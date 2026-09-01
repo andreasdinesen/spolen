@@ -122,7 +122,7 @@ if (typeof module !== 'undefined' && module.exports) {
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 19;
+const APP_VERSION = 20;
 
 /* ---------------------------------------------------------------- tema */
 
@@ -1613,8 +1613,16 @@ function useteTitler(alle, kunSerier) {
  * Knappen vises kun, naar der ER noget at rydde - ellers er den bare en
  * knap, der siger "nul".
  */
+/*
+ * Hvad oprydningen daekker, naar ruden AABNER.
+ *
+ * Ét sted, saa knappens tal og rudens tal ikke kan drive fra hinanden -
+ * det var praecis dét, der skete, da de var to (2026-09-01).
+ */
+const OPRYDNING_KUN_SERIER = false;
+
 function ryddeKnap(alle) {
-  const kandidater = useteTitler(alle, false);
+  const kandidater = useteTitler(alle, OPRYDNING_KUN_SERIER);
   if (!kandidater.length) return null;
   return el('button', {
     class: 'btn ghost lille',
@@ -1636,7 +1644,21 @@ function ryddeKnap(alle) {
  * skelnes paa, er hvor markeringen kom fra - derfor staar `source` med.
  */
 function visOprydning(alle) {
-  let kunSerier = true;
+  /*
+   * Standarden er ALLE slags - ikke kun serier.
+   *
+   * Foerste udgave aabnede med "kun serier" slaaet til, fordi det var serier,
+   * Andreas spurgte om. Men knappen taeller alle slags, og dialogen taalte
+   * kun serier: hos ham sagde knappen 255 og ruden 0 (2026-09-01).
+   *
+   * Og det viste noget om dataene: alle hans 118 serier HAR et set afsnit.
+   * De 255 usete er film, fra Trakt-samlingen. En standard, der gemmer dem,
+   * goer funktionen ubrugelig netop dér, hvor der er noget at rydde.
+   *
+   * Reglen er nu: knappen og ruden taeller det SAMME, saa de aldrig kan
+   * modsige hinanden. Fluebenet indsnaevrer derfra.
+   */
+  let kunSerier = OPRYDNING_KUN_SERIER;
   const bag = el('div', { class: 'modalbag', onclick: (e) => { if (e.target === bag) luk(); } });
   const luk = () => { bag.remove(); document.removeEventListener('keydown', paaTast); };
   const paaTast = (e) => { if (e.key === 'Escape') luk(); };
@@ -2471,8 +2493,23 @@ function mcpAfsnit() {
 /* ---------------------------------------------------------- titelvisning */
 
 async function aabnTitel(id) {
+  /*
+   * HUSK, hvor man kom fra.
+   *
+   * Tilbage-knappen sagde "← Library", uanset om man kom fra Up Next,
+   * History eller en soegning - og saa sender den én et andet sted hen, end
+   * den lover (Andreas, 2026-09-01).
+   *
+   * Gaar man fra én titel til en anden - via samlingen eller de beslaegtede -
+   * BEVARES den oprindelige kilde. Ellers ville "tilbage" foere til den
+   * forrige titel, og man kunne ikke komme hjem uden at trykke mange gange.
+   */
+  const fra = state.view === 'title'
+    ? (state.titel && state.titel.fra) || 'library'
+    : state.view;
+
   state.view = 'title';
-  state.titel = { id, data: null, fejl: '', aabne: new Set(), beslaegtede: null };
+  state.titel = { id, data: null, fejl: '', aabne: new Set(), beslaegtede: null, fra };
   tegnSide();
   try {
     state.titel.data = await api(`/titles/${encodeURIComponent(id)}`);
@@ -2501,8 +2538,7 @@ function titelSide() {
 
   return el('div', {}, [
     el('div', { class: 'titelrad' }, [
-      el('button', { class: 'btn ghost lille', text: '← Library',
-        onclick: () => { state.view = 'library'; tegnSide(); } }),
+      ...tilbageKnapper(t.fra),
       // Kun paa noget, man FAKTISK har. Ellers ville knappen love at fjerne
       // en titel, der ikke er der.
       t.data.tracking && titel.kind === 'tv' ? skjulFraUpNext(t.data) : null,
@@ -2718,6 +2754,38 @@ async function genindlaesTitel(titleId) {
   state.titel.beslaegtede = beslaegtede;
   await Promise.all([hentUpNext(), hentBibliotek()]);
   tegnSide();
+}
+
+/*
+ * Vejen tilbage.
+ *
+ * Den foerste knap er DÉR, man kom fra - ellers lover den ét og goer noget
+ * andet. Biblioteket staar ved siden af, naar man ikke kom derfra: det er
+ * det sted, man oftest vil videre til, og at skulle om ad venstremenuen for
+ * at komme til sin egen samling er et unoedigt skridt (Andreas, 2026-09-01).
+ */
+function tilbageKnapper(fra) {
+  const navne = { 'up-next': 'Up Next', library: 'Library', history: 'History',
+    calendar: 'Calendar', stats: 'Statistics', sharing: 'Sharing' };
+  const kilde = navne[fra] ? fra : 'library';
+
+  const knap = (id, primaer) => el('button', {
+    class: 'btn ghost lille',
+    text: `${primaer ? '← ' : ''}${navne[id]}`,
+    title: `Back to ${navne[id]}`,
+    onclick: async () => {
+      state.view = id;
+      tegnSide();
+      // Listerne kan vaere aendret af det, man lige gjorde inde paa titlen.
+      if (id === 'up-next') { await hentUpNext(); tegnSide(); }
+      if (id === 'library') { await hentBibliotek(); tegnSide(); }
+      if (id === 'history') { await hentHistorik(); tegnSide(); }
+    },
+  });
+
+  return kilde === 'library'
+    ? [knap('library', true)]
+    : [knap(kilde, true), knap('library', false)];
 }
 
 /*

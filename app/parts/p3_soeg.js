@@ -445,8 +445,16 @@ function useteTitler(alle, kunSerier) {
  * Knappen vises kun, naar der ER noget at rydde - ellers er den bare en
  * knap, der siger "nul".
  */
+/*
+ * Hvad oprydningen daekker, naar ruden AABNER.
+ *
+ * Ét sted, saa knappens tal og rudens tal ikke kan drive fra hinanden -
+ * det var praecis dét, der skete, da de var to (2026-09-01).
+ */
+const OPRYDNING_KUN_SERIER = false;
+
 function ryddeKnap(alle) {
-  const kandidater = useteTitler(alle, false);
+  const kandidater = useteTitler(alle, OPRYDNING_KUN_SERIER);
   if (!kandidater.length) return null;
   return el('button', {
     class: 'btn ghost lille',
@@ -468,7 +476,21 @@ function ryddeKnap(alle) {
  * skelnes paa, er hvor markeringen kom fra - derfor staar `source` med.
  */
 function visOprydning(alle) {
-  let kunSerier = true;
+  /*
+   * Standarden er ALLE slags - ikke kun serier.
+   *
+   * Foerste udgave aabnede med "kun serier" slaaet til, fordi det var serier,
+   * Andreas spurgte om. Men knappen taeller alle slags, og dialogen taalte
+   * kun serier: hos ham sagde knappen 255 og ruden 0 (2026-09-01).
+   *
+   * Og det viste noget om dataene: alle hans 118 serier HAR et set afsnit.
+   * De 255 usete er film, fra Trakt-samlingen. En standard, der gemmer dem,
+   * goer funktionen ubrugelig netop dér, hvor der er noget at rydde.
+   *
+   * Reglen er nu: knappen og ruden taeller det SAMME, saa de aldrig kan
+   * modsige hinanden. Fluebenet indsnaevrer derfra.
+   */
+  let kunSerier = OPRYDNING_KUN_SERIER;
   const bag = el('div', { class: 'modalbag', onclick: (e) => { if (e.target === bag) luk(); } });
   const luk = () => { bag.remove(); document.removeEventListener('keydown', paaTast); };
   const paaTast = (e) => { if (e.key === 'Escape') luk(); };
