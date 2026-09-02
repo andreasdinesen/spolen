@@ -9,60 +9,142 @@
  * ved siden af siger, om der ER en noegle - i stedet for at vise prikker,
  * der ligner en vaerdi, man kunne rette i.
  */
+/*
+ * Indstillingerne er delt i FANER, ikke én lang stribe.
+ *
+ * Tolv overskrifter i én kolonne betyder, at man ruller forbi ti ting for at
+ * naa den ellevte. Samme inddeling som Sagu v45 fik, som igen har den fra
+ * verdande (Andreas, 2026-09-02).
+ *
+ * Fanerne skjuler med `hidden` - de udelader ikke noget fra dokumentet.
+ * Foldeafsnittene bygger i forvejen foerst deres indhold, naar de aabnes, saa
+ * en skjult fane koster kun sine overskrifter.
+ */
+const SETTINGS_FANER = [
+  { id: 'konto', navn: 'Account' },
+  { id: 'medier', navn: 'Media' },
+  { id: 'import', navn: 'Import' },
+  { id: 'broer', navn: 'Connections' },
+  { id: 'server', navn: 'Server', kunAdmin: true },
+];
+
+/*
+ * Valget huskes i localStorage, ikke i state.
+ *
+ * Det afhaenger af, hvad man sidst var i gang med paa DENNE maskine - ikke af
+ * kontoen. Samme begrundelse som temaet.
+ */
+function gemtFane() {
+  try {
+    const g = localStorage.getItem('spolen_fane');
+    return SETTINGS_FANER.some((f) => f.id === g) ? g : 'konto';
+  } catch { return 'konto'; }
+}
+
+/*
+ * Er den gemte fane ikke synlig for DEN HER bruger - "Server" for en, der
+ * ikke er administrator - falder den tilbage til den foerste. Ellers aabner
+ * man indstillingerne og ser en tom side.
+ */
+function aktivFane() {
+  const g = gemtFane();
+  const f = SETTINGS_FANER.find((x) => x.id === g);
+  const admin = state.user && state.user.isAdmin;
+  return (f && (!f.kunAdmin || admin)) ? g : 'konto';
+}
+
+function visFane(id) {
+  for (const e of document.querySelectorAll('.fane')) e.hidden = e.dataset.fane !== id;
+  for (const k of document.querySelectorAll('[data-fane-knap]')) {
+    const paa = k.dataset.faneKnap === id;
+    k.classList.toggle('paa', paa);
+    k.setAttribute('aria-selected', paa ? 'true' : 'false');
+  }
+}
+
 function settingsSide() {
   const admin = state.user && state.user.isAdmin;
+  const nu = aktivFane();
+
+  const fanebar = el('nav', { class: 'faner', role: 'tablist' },
+    SETTINGS_FANER.filter((f) => !f.kunAdmin || admin).map((f) => el('button', {
+      class: `fane-knap${f.id === nu ? ' paa' : ''}`,
+      'data-fane-knap': f.id,
+      role: 'tab',
+      'aria-selected': f.id === nu ? 'true' : 'false',
+      text: f.navn,
+      onclick: () => {
+        try { localStorage.setItem('spolen_fane', f.id); } catch { /* privat tilstand */ }
+        visFane(f.id);
+        /*
+         * Til toppen: en fane, man skifter til, skal begynde ved sin foerste
+         * overskrift - ikke midt i, fordi den forrige var laengere.
+         */
+        rulTil(0, false);
+      },
+    })));
+
+  const fane = (id, boern) => el('section', {
+    class: 'fane', 'data-fane': id, role: 'tabpanel', hidden: id !== nu,
+  }, boern.filter(Boolean));
+
   /*
-   * Alle hovedpunkter er foldbare og starter LUKKEDE.
+   * `bredside`: fyld kolonnen.
    *
-   * Indholdet bygges foerst, naar afsnittet aabnes - tjenestelisten alene er
-   * 62 raekker med hvert sit logo.
+   * .main er en kolonne-flexboks med align-items: center, saa et barn uden
+   * bredde krymper til sit eget indhold. Med alt foldet ind blev
+   * indstillingerne 340px brede i en kolonne paa 1000, og fanerakken laa og
+   * flød i midten (maalt 2026-09-02).
    */
-  return el('div', {}, [
+  return el('div', { class: 'bredside' }, [
     el('h1', { text: 'Settings' }),
+    fanebar,
 
-    /*
-     * Temaet staar OEVERST og er ikke foldet.
-     *
-     * Det er den ene indstilling, man aendrer for at se paa den - er den
-     * gemt bag en overskrift, skal man folde ud, klikke, og folde ind igen
-     * for at se resultatet. De tre valg fylder én linje (Andreas,
-     * 2026-08-29).
-     */
-    temaAfsnit(),
+    fane('konto', [
+      /*
+       * Temaet staar OEVERST og er ikke foldet.
+       *
+       * Det er den ene indstilling, man aendrer for at se paa den - er den
+       * gemt bag en overskrift, skal man folde ud, klikke, og folde ind igen
+       * for at se resultatet (Andreas, 2026-08-29).
+       */
+      temaAfsnit(),
+      foldAfsnit('praef', 'Your preferences', null, personligeAfsnit),
+      foldAfsnit('sikkerhed', 'Security', null, sikkerhedsAfsnit),
+    ]),
 
-    foldAfsnit('metadata', 'Metadata', 'tmdb', () => (admin
-      ? tmdbAfsnit()
-      : el('p', { class: 'dim', text: 'Only the administrator can change the TMDB key.' }))),
+    fane('medier', [
+      /* Noeglen staar HER og ikke under Server: uden den er der hverken
+         titler eller plakater, og en almindelig bruger skal kunne se, at det
+         er dét, der mangler - ogsaa selv om kun en administrator kan rette
+         den. */
+      foldAfsnit('metadata', 'Metadata', 'tmdb', () => (admin
+        ? tmdbAfsnit()
+        : el('p', { class: 'dim', text: 'Only the administrator can change the TMDB key.' }))),
+      foldAfsnit('tjenester', 'Your streaming services', null, tjenesteAfsnit),
+      foldAfsnit('notifik', 'Notifications', null, notifikationAfsnit),
+    ]),
 
-    foldAfsnit('praef', 'Your preferences', null, personligeAfsnit),
+    fane('import', [
+      foldAfsnit('import', 'Import your history', null, importSide),
+      /*
+       * Plex staar for sig selv - ikke inde under importen. Det er en
+       * LOEBENDE forbindelse (polling, webhook, watchlist), ikke et
+       * engangstrin (Andreas, 2026-08-29).
+       */
+      foldAfsnit('plex', 'Plex', 'plex', plexAfsnit),
+      admin ? foldAfsnit('traktapp', 'Trakt application', 'trakt', traktAppAfsnit) : null,
+    ]),
 
-    foldAfsnit('tjenester', 'Your streaming services', null, tjenesteAfsnit),
+    fane('broer', [
+      foldAfsnit('mcp', 'Claude connector', 'mcp', mcpAfsnit),
+      foldAfsnit('noegler', 'Access keys', 'noegler', noegleAfsnit),
+    ]),
 
-    foldAfsnit('import', 'Import your history', null, importSide),
-
-    /*
-     * Plex staar for sig selv - ikke inde under importen.
-     *
-     * Det er en LOEBENDE forbindelse (polling, webhook, watchlist, lokalt
-     * katalog), ikke et engangstrin. Inde i importafsnittet skulle man
-     * foerst aabne "Import your history" for at naa den, og den skubbede
-     * samtidig importens eget svar ned under skaermkanten
-     * (Andreas, 2026-08-29).
-     */
-    foldAfsnit('plex', 'Plex', 'plex', plexAfsnit),
-
-    admin ? foldAfsnit('traktapp', 'Trakt application', 'trakt', traktAppAfsnit) : null,
-
-    foldAfsnit('notifik', 'Notifications', null, notifikationAfsnit),
-
-    foldAfsnit('sikkerhed', 'Security', null, sikkerhedsAfsnit),
-
-    foldAfsnit('mcp', 'Claude connector', 'mcp', mcpAfsnit),
-
-    foldAfsnit('noegler', 'Access keys', 'noegler', noegleAfsnit),
-
-    admin ? foldAfsnit('server', 'This server', null, serverAfsnit) : null,
-  ]);
+    admin ? fane('server', [
+      foldAfsnit('server', 'This server', null, serverAfsnit),
+    ]) : null,
+  ].filter(Boolean));
 }
 
 /*

@@ -2933,3 +2933,52 @@ button.version-linje.gammel:hover { text-decoration: underline; }
    ruden, ikke goere ruden hoejere end skaermen. */
 .oprydning { max-width: 560px; }
 .oprydningsliste { max-height: 44vh; overflow-y: auto; margin: 10px 0; }
+
+/* ------------------------------------------ faner i indstillingerne */
+
+/*
+ * Én raekke, der ruller VANDRET paa en smal skaerm frem for at ombryde: en
+ * fanerakke i to linjer flytter indholdet ned og ligner to raekker knapper.
+ *
+ * Samme greb som Sagu v45, som igen har det fra verdande.
+ */
+.faner {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 18px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.faner::-webkit-scrollbar { display: none; }
+
+.fane-knap {
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  /*
+   * Understregningen tegnes ALTID - gennemsigtig, naar fanen ikke er valgt.
+   * Ellers ville raekken hoppe en pixel, hver gang man skiftede fane.
+   */
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.fane-knap:hover { color: var(--text); }
+.fane-knap.paa { color: var(--accent-text); border-bottom-color: var(--accent-text); font-weight: 600; }
+
+/* Foerste afsnit i en fane skal ikke have luft over - fanerakken er
+   allerede afstanden. */
+.fane > .foldafsnit:first-child,
+.fane > .card:first-child { margin-top: 0; }
+
+/* Indstillingerne fylder kolonnen, men teksten skal stadig kunne laeses:
+   en linje paa tusind pixel er for lang at foelge med oejet. */
+.bredside .fane { max-width: 900px; }
