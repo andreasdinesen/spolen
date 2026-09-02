@@ -11,7 +11,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 20;
+const APP_VERSION = 21;
 
 /* ---------------------------------------------------------------- tema */
 
@@ -58,7 +58,9 @@ const smalSkaerm = () => window.matchMedia(`(max-width: ${MOBIL}px)`).matches;
 const state = {
   user: null,
   config: null,
-  view: 'up-next',
+  /* Startsiden. Kalenderen svarer paa "hvornaar kommer der noget nyt" -
+     det, appen oftest aabnes for (Andreas, 2026-09-02). */
+  view: 'calendar',
   rows: [],
   people: [],
   shares: { out: [], in: [] },

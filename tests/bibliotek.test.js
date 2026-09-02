@@ -251,3 +251,41 @@ test('listerne hentes forfra, naar man gaar tilbage', () => {
   assert.match(krop, /hentBibliotek\(\)/, 'biblioteket hentes ikke forfra');
   assert.match(krop, /hentHistorik\(\)/, 'historikken hentes ikke forfra');
 });
+
+/* --------------------------------------------------- start og menuorden */
+
+/*
+ * Kalenderen er startsiden (Andreas, 2026-09-02).
+ *
+ * Up Next svarer paa "hvad kan jeg se nu"; kalenderen svarer paa "hvornaar
+ * kommer der noget nyt". Med et bibliotek, hvor det meste er set, er det
+ * andet det spoergsmaal, appen aabnes for.
+ */
+test('kalenderen er startsiden', () => {
+  const CORE = fs.readFileSync(rod('app', 'parts', 'p1_core.js'), 'utf8');
+  assert.match(CORE, /view: 'calendar',/, 'startsiden er ikke kalenderen');
+  assert.ok(!/view: 'up-next',/.test(CORE), 'startsiden er stadig Up Next');
+});
+
+test('Calendar og Up Next har byttet plads', () => {
+  const i = APP.indexOf('const SIDER');
+  const sider = APP.slice(i, APP.indexOf('];', i));
+  const raek = [...sider.matchAll(/id: '([a-z-]+)'/g)].map((m) => m[1]);
+  assert.strictEqual(raek[0], 'calendar', 'Calendar staar ikke oeverst');
+  assert.ok(raek.indexOf('up-next') > raek.indexOf('history'),
+    'Up Next staar ikke, hvor Calendar stod');
+});
+
+/*
+ * Startsiden skal have indhold MED DET SAMME.
+ *
+ * Hentes kalenderen foerst, naar man klikker paa den, staar startsiden tom
+ * det foerste sekund - og en tom startside ligner en app uden data.
+ */
+test('kalenderen hentes ved opstart, ikke foerst ved klik', () => {
+  assert.match(APP, /await Promise\.all\(\[hentKalender\(\)/,
+    'kalenderen hentes ikke ved opstart - saa er startsiden tom et oejeblik');
+  // Up Next og biblioteket hentes stadig: menuen viser tal fra dem.
+  assert.match(APP, /hentKalender\(\), hentUpNext\(\)/,
+    'Up Next hentes ikke laengere ved opstart');
+});

@@ -85,10 +85,18 @@ function tilslutNav() {
    saa en soegning er noget man goer midt i noget andet - ikke et sted man
    gaar hen. */
 const SIDER = [
-  { id: 'up-next', navn: 'Up Next' },
+  /*
+   * Kalenderen staar OEVERST og er startsiden (Andreas, 2026-09-02).
+   *
+   * Up Next svarer paa "hvad kan jeg se nu"; kalenderen svarer paa "hvornaar
+   * kommer der noget nyt". Med et bibliotek, hvor det meste er set, er det
+   * andet spoergsmaal det, man aabner appen for at faa svar paa - saa
+   * byttede de to plads.
+   */
+  { id: 'calendar', navn: 'Calendar' },
   { id: 'library', navn: 'Library' },
   { id: 'history', navn: 'History' },
-  { id: 'calendar', navn: 'Calendar' },
+  { id: 'up-next', navn: 'Up Next' },
   { id: 'stats', navn: 'Statistics' },
   { id: 'sharing', navn: 'Sharing' },
   /*
@@ -731,7 +739,12 @@ async function indlaes() {
       state.config.plexLinked = me.integrations.plexLinked;
     }
     if (!state.user) { loginSide(); return; }
-    await Promise.all([hentUpNext(), hentDelinger(), hentBibliotek()]);
+    /*
+     * Kalenderen hentes FOERST, fordi den er startsiden. Up Next og
+     * biblioteket hentes stadig med: venstremenuen viser tal fra dem, og
+     * skifter man over, skal siden ikke vaere tom et oejeblik.
+     */
+    await Promise.all([hentKalender(), hentUpNext(), hentDelinger(), hentBibliotek()]);
     tegnSide();
     tilslutSkrivForAtSoege();
     tilslutNav();

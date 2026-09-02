@@ -67,14 +67,20 @@ test('loftet er begraenset i begge ender', () => {
 
 /* ------------------------------------------------------------- fladen */
 
-test('History staar i menuen mellem Library og Calendar', () => {
+test('History staar i menuen lige efter Library', () => {
   const i = APP.indexOf('const SIDER');
   const sider = APP.slice(i, APP.indexOf('];', i));
   assert.match(sider, /\{ id: 'history', navn: 'History' \}/, 'menupunktet mangler');
-  assert.ok(sider.indexOf("'library'") < sider.indexOf("'history'"),
-    'History staar foer Library');
-  assert.ok(sider.indexOf("'history'") < sider.indexOf("'calendar'"),
-    'History staar efter Calendar');
+
+  /*
+   * Foer laa History mellem Library og Calendar. Da kalenderen blev
+   * startside og rykkede oeverst (2026-09-02), holdt den formulering op med
+   * at passe - men EGENSKABEN er den samme: History hoerer sammen med de to
+   * andre "kig i mine ting"-sider, lige efter Library.
+   */
+  const raek = [...sider.matchAll(/id: '([a-z-]+)'/g)].map((m) => m[1]);
+  assert.strictEqual(raek[raek.indexOf('library') + 1], 'history',
+    'History staar ikke lige efter Library');
   assert.match(APP, /if \(state\.view === 'history'\) \{ skal\(historikSide\(\)\); return; \}/,
     'siden rutes ikke');
   assert.match(APP, /if \(s\.id === 'history'\) \{ await hentHistorik\(\)/,
