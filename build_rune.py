@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 
 import yaml
 
@@ -35,6 +36,32 @@ OUT = os.path.join(ROOT, 'runes', 'spolen.yaml')
 
 GITHUB_BRUGER = 'andreasdinesen'
 GITHUB_REPO = 'spolen'
+
+# ---------------------------------------------- runens version vs. appens
+#
+# Indtil v22 var de ét tal. Runen bar ikke koden - den hentede den fra en
+# tag - men taggen stod i install-scriptet, saa en ny app-udgave KRAEVEDE en
+# ny rune. Andreas skulle derfor gennem panelets to trin (Reload rune, saa
+# Update) ved hver eneste udgivelse for at flytte ét tal i en YAML.
+#
+# Fra v23 henter `app/kilde.js` koden ved hver opstart, og **en genstart ER
+# opdateringen**. Runen er blevet en startsnor: den skal kun udgives, naar
+# selve runen aendrer sig (variabler, startup, porte, watchers, events).
+#
+# Derfor to tal:
+#   APP_VERSION (i app/parts/p1_core.js) - koden. Bumpes ved hver udgivelse.
+#   RUNE_VERSION (her)                   - runen. Bumpes KUN naar YAML'en
+#                                          herunder aendrer sig.
+#
+# Bumper man runen ved hver udgivelse alligevel, er man tilbage ved to trin
+# i panelet, og hele oevelsen er spildt.
+#
+# RUNE_VERSION er ogsaa den tag, install-scriptet henter FOERSTE gang. Den
+# behoever ikke vaere den nyeste - foerste opstart henter alligevel det, der
+# staar i KODE_VERSION - men den skal vaere en udgave, der KAN starte, og
+# den skal vaere >= FOERSTE_MED_KILDE, ellers lander en ny installation paa
+# kode uden kilde.js, og saa opdaterer en genstart ingenting.
+RUNE_VERSION = 23
 
 # Panelet templaterer {{STORE_BOGSTAVER}} - staar det i en kildefil, bliver
 # filen aendret bag om ryggen paa os. Og heredoc-markoeren ville lukke
@@ -250,29 +277,62 @@ rm -rf /tmp/spolen-hent
 
 
 def install_script(version):
+    """Runens STARTSNOR. Henter `v<runens version>` - ikke nyeste app-udgave.
+
+    Runen kender kun sin egen version; resten klarer kilde.js ved foerste
+    opstart. Derfor slutter scriptet ikke med "klar", men med at fortaelle,
+    hvad der sker naeste gang serveren starter.
+    """
     return f"""set -eu
-echo "Installerer spolen v{version} ..."
+echo "Installerer spolen (startsnor v{version}) ..."
 echo "Node: $(node --version)"
 
 {hente_trin(version)}
 echo "Filer udpakket:"
 ls -1 app app/public
-echo "Klar. Start serveren i panelet."
+echo "Klar. Start serveren i panelet - den henter selv nyeste"
+echo "udgave (eller den, KODE_VERSION laaser til), foer den starter."
 """
 
 
 def opdater_script(version):
+    """update:-knappen i panelet.
+
+    Den maa ALDRIG hente startsnorens tag, naar appen allerede er laengere
+    fremme: v23 oven i v40 er en nedgradering, ingen bad om. Findes
+    app/kilde.js, er den facit - den kender KODE_VERSION og henter praecis
+    den udgave, serveren ville hente ved en genstart. Startsnoren er kun
+    redningen, hvis app/ er vaek eller fra foer kilde.js fandtes.
+    """
+    hent = textwrap.indent(hente_trin(version), '  ')
     return f"""set -eu
-echo "Opdaterer spolen til v{version} ..."
+echo "Opdaterer spolen ..."
 echo "Node: $(node --version)"
 
-{hente_trin(version)}
+if [ -f app/kilde.js ]; then
+  # Panelet templaterer variabler ind i scriptets TEKST, og de findes
+  # OGSAA som env i containeren. Hvilken af delene der sker, er ikke
+  # bevist (doda, 2026-09-03), saa vi proever skabelonen og falder tilbage
+  # til env, hvis den staar utemplateret. En laasning maa ikke kunne tabes
+  # paa en antagelse om, hvad panelet goer.
+  K="{{{{KODE_VERSION}}}}"
+  case "$K" in
+    \'\') : ;;
+    seneste|latest|[0-9]*) : ;;
+    *) K="${{KODE_VERSION:-}}" ;;
+  esac
+  echo "Oensket udgave: ${{K:-nyeste}}"
+  KODE_VERSION="$K" node app/kilde.js
+else
+{hent}fi
+
 echo "App-filerne er skiftet ud. Databasen i /data er uroert."
-echo "Skemaet opdateres automatisk, naar serveren starter."
+echo "Genstart spolen, saa serveren koerer den nye kode."
 """
 
 
-def byg_yaml(version):
+def byg_yaml(version, rune_version):
+    del version   # appens tal hoerer ikke i runen mere - se RUNE_VERSION
     return {
         'gameskill': {
             'id': 'spolen',
@@ -286,7 +346,7 @@ def byg_yaml(version):
                 'husstanden. Egen SQLite-database, ingen eksterne afhaengigheder.'
             ),
             'author': 'andreas',
-            'version': version,
+            'version': rune_version,
             'icon': 'app',
             'docker': {'image': '{{NODE_IMAGE}}'},
             'variables': [
@@ -295,14 +355,74 @@ def byg_yaml(version):
                  'default': 'node:24-alpine',
                  'pattern': r'^node:[0-9][A-Za-z0-9._-]*$',
                  'hint': 'Skal vaere et node:-image, fx node:24-alpine'},
+
+                # Laasen. Tom er STANDARDEN, fordi det er den, der goer runen
+                # overfloedig i hverdagen: tom = hent nyeste ved hver
+                # genstart. Et tal er hele vejen tilbage - saet 21, genstart,
+                # og serveren koerer v21 igen.
+                #
+                # »goer det normale« maa ikke kraeve, at der staar noget: et
+                # felt, man SKAL udfylde for at faa den almindelige opfoersel,
+                # laeser man som en indstilling, nogen har taget (Andreas
+                # efter doda v82). Ordene godtages stadig - gamle servere kan
+                # have dem staaende.
+                #
+                # Spoergsmaalstegnet i moensteret er noedvendigt: uden det kan
+                # den tomme standard ikke gemmes i panelet. Og moensteret
+                # afviser »v21« og »21.2« DER, frem for at lade kilde.js
+                # tolke noget, brugeren ikke skrev.
+                {'key': 'KODE_VERSION', 'name': 'Kodeversion', 'type': 'string',
+                 'default': '',
+                 'pattern': r'^([0-9]+|seneste|latest)?$',
+                 'hint': 'Tom = hent nyeste udgivelse fra GitHub ved hver genstart. '
+                         'Et tal (fx 21) laaser til praecis den udgave.'},
             ],
-            'install': {'image': '{{NODE_IMAGE}}', 'script': install_script(version)},
+            # Der staar ikke et GITHUB_TOKEN her. Repoet er offentligt, saa
+            # hentningen kraever ingen godkendelse - og et felt, der ikke goer
+            # noget, er et sted at lede efter en fejl, der ikke er der.
+            # Begge scripts henter STARTSNOREN, ikke nyeste app-udgave:
+            # runen kender kun sin egen version. Resten klarer kilde.js.
+            'install': {'image': '{{NODE_IMAGE}}', 'script': install_script(rune_version)},
             'update': {'image': '{{NODE_IMAGE}}', 'label': 'Opdater spolen',
-                       'script': opdater_script(version)},
+                       'script': opdater_script(rune_version)},
             'startup': {
-                # node:sqlite er stabil fra Node 24, men flaget skal stadig
-                # kunne bruges, hvis nogen saetter et aeldre image.
-                'command': ('if node -e "require(\'node:sqlite\')" >/dev/null 2>&1; then\n'
+                # Opstarten ER opdateringen. Tre trin, i den raekkefoelge:
+                #
+                #  1. Redningen. kilde.js bytter app/ ud med to omdoebninger,
+                #     og doer containeren imellem dem, ligger den gamle app
+                #     under .spolen-gammel. Uden det her trin ville et
+                #     daarligt sekund efterlade en container helt UDEN app/ -
+                #     og saa er der heller ingen kilde.js til at hente en ny.
+                #     Det er den eneste rigtigt farlige brik; alt andet
+                #     herinde maa fejle uden konsekvens.
+                #  2. Hentningen. Fejler den, siger den det og gaar videre -
+                #     den kode, der ligger, er stadig en koerende spolen.
+                #     Derfor `|| echo`, og derfor skriver kilde.js aldrig
+                #     [fejl] i en advarsel: panelets watcher taeller de
+                #     linjer og ville sende en notifikation, hver gang nettet
+                #     blinkede.
+                #
+                #     `if [ -f ... ]` foran er ikke pynt. Laaser KODE_VERSION
+                #     tilbage til en udgave fra FOER kilde.js fandtes, er
+                #     modulet vaek sammen med resten af app/, og `node
+                #     app/kilde.js` ville kaste et Node-stakspor i panelets
+                #     log ved HVER genstart. `||` fanger det, saa serveren
+                #     starter - men et stakspor, der ikke er en fejl, bliver
+                #     liggende for evigt (tovo, 2026-09-03). Sig i stedet,
+                #     hvad vejen videre er.
+                #  3. Serveren, som foer. node:sqlite er stabil fra Node 24,
+                #     men flaget skal stadig kunne bruges paa et aeldre image.
+                'command': ('if [ ! -f app/server.js ] && [ -f .spolen-gammel/server.js ]; then\n'
+                            '  rm -rf app\n'
+                            '  mv .spolen-gammel app\n'
+                            '  echo "[kode] app/ sat tilbage efter en afbrudt udskiftning"\n'
+                            'fi\n'
+                            'if [ -f app/kilde.js ]; then\n'
+                            '  node app/kilde.js || echo "[kode] advarsel: opdateringen kunne ikke koeres"\n'
+                            'else\n'
+                            '  echo "[kode] denne udgave henter ikke sig selv - brug Opdater spolen i panelet"\n'
+                            'fi\n'
+                            'if node -e "require(\'node:sqlite\')" >/dev/null 2>&1; then\n'
                             '  exec node app/server.js\n'
                             'else\n'
                             '  exec node --experimental-sqlite app/server.js\n'
@@ -373,24 +493,66 @@ def tjek_events(doc):
           f'watchers: {len(doc["gameskill"].get("watchers", []))}')
 
 
+def foerste_med_kilde():
+    """Det tal, app/kilde.js selv siger er den foerste selvhentende udgave.
+
+    Det staar ÉT sted (i kilde.js), fordi to kopier af det tal ville drive
+    fra hinanden - og forskellen ville foerst vise sig hos en, der
+    installerer forfra.
+    """
+    with open(os.path.join(APP, 'kilde.js'), encoding='utf8') as fh:
+        m = re.search(r'^const FOERSTE_MED_KILDE = (\d+);', fh.read(), re.M)
+    if not m:
+        fejl('kunne ikke finde `const FOERSTE_MED_KILDE = N;` i app/kilde.js')
+    return int(m.group(1))
+
+
+def tjek_startsnor(rune_version, version):
+    """Runen er en startsnor - men den skal kunne baere sin egen vaegt.
+
+    To ting kan gaa galt uset, og begge viser sig foerst hos en, der
+    installerer forfra:
+
+      * peger startsnoren paa en tag, der er NYERE end app-koden, findes
+        taggen ikke endnu, og install svarer 404;
+      * peger den paa en tag fra FOER kilde.js fandtes, lander en frisk
+        installation paa kode, der ikke kan hente sig selv - og saa
+        opdaterer en genstart ingenting, hvilket er praecis den ting, hele
+        oevelsen skulle fjerne.
+    """
+    if rune_version > version:
+        fejl(f'RUNE_VERSION ({rune_version}) er nyere end APP_VERSION ({version}) - '
+             'install ville hente en tag, der ikke findes')
+    foerste = foerste_med_kilde()
+    if rune_version < foerste:
+        print()
+        print(f'  ADVARSEL: startsnoren peger paa v{rune_version}, og kilde.js kom')
+        print(f'            foerst i v{foerste}. En frisk installation ville lande paa')
+        print('            kode uden kilde.js og aldrig hente sig selv.')
+        print(f'            Saet RUNE_VERSION = {foerste} (eller nyere) ved udgivelsen.')
+        print()
+
+
 def main():
     print('spolen - bygger rune')
     version = app_version()
-    print(f'  version: {version}')
+    print(f'  app:  v{version}')
+    print(f'  rune: v{RUNE_VERSION}' + ('' if RUNE_VERSION == version else '  (startsnor - bumpes kun naar YAML aendrer sig)'))
     saml_frontend()
     stempl_version(version)
     stempl_sw(version)
     filer = indsaml_filer()
     tjek_kilder(filer)
     tjek_git(filer)
+    tjek_startsnor(RUNE_VERSION, version)
 
-    doc = byg_yaml(version)
+    doc = byg_yaml(version, RUNE_VERSION)
     tjek_events(doc)
     tekst = yaml.dump(doc, allow_unicode=False, sort_keys=False, width=120)
     # Valider ved at LAESE den igen - en YAML, panelet ikke kan parse, er
     # vaerre end ingen YAML.
     tilbage = yaml.safe_load(tekst)
-    if tilbage['gameskill']['version'] != version:
+    if tilbage['gameskill']['version'] != RUNE_VERSION:
         fejl('YAML-rundturen gav en anden version')
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, 'w', encoding='utf8') as fh:
@@ -398,7 +560,12 @@ def main():
     print(f'  runes/spolen.yaml: {len(tekst):,} tegn')
     print()
     print(f'Faerdig. Udgivelse er TRE trin:  commit  ->  git tag v{version}  ->  git push --tags')
-    print('Uden taggen svarer GitHub 404, og runen kan ikke installeres.')
+    print('Uden taggen svarer GitHub 404 - baade til runens install og til')
+    print('serverens egen hentning ved opstart.')
+    if RUNE_VERSION == version:
+        print()
+        print(f'RUNE_VERSION er ogsaa {version} denne gang, saa runen skal genindlaeses')
+        print('i panelet. Ellers er en genstart nok.')
 
 
 if __name__ == '__main__':

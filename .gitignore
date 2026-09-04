@@ -5,3 +5,8 @@ node_modules/
 *.db-shm
 posters/
 .DS_Store
+
+# Runtime for selvhentningen - hoerer ikke i repoet.
+.spolen-ny/
+.spolen-gammel/
+app/.kode-version

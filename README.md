@@ -54,14 +54,41 @@ python3 build_rune.py                                         # byg runen
 
 ## Installation
 
-Runen installeres fra Yggdrasil Panel. Opdatering er **to trin**:
+Runen installeres fra Yggdrasil Panel. Efter installation: opret den første
+bruger — den bliver administrator. Tilføj en (gratis) TMDB-nøgle under
+Settings, før du søger.
 
-1. **Runes → Browse GitHub → Reload** — henter kun rune-definitionen.
-2. **Serveren → Settings → Update/Reinstall** — installerer selve appen.
-   `/data` (databasen) overlever.
+## Sådan holder du den opdateret
 
-Efter installation: opret den første bruger — den bliver administrator.
-Tilføj en (gratis) TMDB-nøgle under Settings, før du søger.
+**Genstart serveren. Det er hele opdateringen.**
+
+Serveren henter selv sin kode fra GitHub, hver gang den starter: den finder
+den nyeste udgivne `vN`, tjekker at arkivet er en hel spolen med præcis det
+versionsnummer, taggen lover, og bytter `app/` ud. Databasen i `/data` bliver
+ikke rørt.
+
+Runen er kun en **startsnor** — den skal derfor kun genindlæses, når selve
+rune-definitionen ændrer sig (variabler, porte, opstartskommandoen). Står der
+i udgivelsesnoterne, at runen er bumpet, tager du **Runes → Browse GitHub →
+Reload** først; ellers er en genstart nok.
+
+| Panelet | Hvornår |
+|---|---|
+| Genstart | Ved hver ny udgave — det normale |
+| **Opdater spolen** | Vil du hente uden at genstarte (den bruger samme mekanisme) |
+| Runes → Reload | Kun når runens egen version er bumpet |
+
+### Hvis en udgave er dårlig
+
+Feltet **Kodeversion** (`KODE_VERSION`) i panelet er vejen tilbage:
+
+* **tomt** = hent nyeste ved hver genstart. Det er standarden.
+* **et tal**, fx `21` = lås til præcis den udgave. Skriv tallet, genstart.
+* Frem igen: tøm feltet, genstart.
+
+Kan GitHub ikke nås, siger serveren det i loggen og starter på den kode, der
+allerede ligger. En netværksfejl udsætter en opdatering — den slukker aldrig
+for appen.
 
 ## Versionshistorik
 
