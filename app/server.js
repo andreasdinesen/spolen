@@ -3880,6 +3880,11 @@ const ROUTES = {
     }
     setSetting(user.id, 'totp_enabled', '1');
     setSetting(user.id, 'totp_last', String(vindue));
+    // Alle ANDRE sessioner doer - samme regel som ved kodeordsskifte. Ellers
+    // lever en session, der blev aabnet med kodeordet alene, videre i op til
+    // SESSION_DAYS, som om det andet trin aldrig var slaaet til.
+    const denne = parseCookies(req.headers.cookie)[SESSION_COOKIE] || '';
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(user.id, denne);
     audit('2fa-slaaet-til', user.username, null);
     // Genoprettelseskoderne vises ÉN gang. De kan ikke hentes frem igen -
     // kun erstattes af ti nye.

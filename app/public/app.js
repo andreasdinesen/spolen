@@ -122,7 +122,7 @@ if (typeof module !== 'undefined' && module.exports) {
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 24;
+const APP_VERSION = 25;
 
 /* ---------------------------------------------------------------- tema */
 
@@ -162,7 +162,8 @@ function visuelTema() {
 /* Mobilgraensen bor i ÉN konstant, fordi den findes BEGGE steder: her og i
    style.css. Er de ude af trit, folder menuknappen sidebaren sammen paa en
    iPad, hvor CSS'en tror den er en overlay (Kokkeri v20). 900 og ikke 760 -
-   en iPad i portraet er 768/834 px. */
+   en iPad i portraet er 768/834 px. `tjek_mobilgraense()` i build_rune.py
+   fejler, hvis et @media-brudpunkt i style.css ikke stemmer med tallet. */
 const MOBIL = 900;
 const smalSkaerm = () => window.matchMedia(`(max-width: ${MOBIL}px)`).matches;
 

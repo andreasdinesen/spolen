@@ -199,6 +199,72 @@ def tjek_kilder(filer):
         if fund:
             fejl(f'{rel} indeholder {fund.group(0)} - panelet ville templatere den')
     print(f'  kilder: {len(filer)} filer tjekket')
+    tjek_mobilgraense()
+
+
+# Brudpunkter i style.css, der med vilje IKKE er mobilgraensen. Nøglen er
+# (egenskab, px). Tilfoej kun her, hvis reglen handler om INDHOLDET og ville
+# vaere rigtig, uanset hvor skallen folder sig.
+INDHOLDS_BRUDPUNKTER = {
+    ('min-width', 1100): 'plakatgitteret faar stoerre kort paa brede skaerme',
+}
+
+
+def tjek_mobilgraense():
+    """Mobilgraensen staar to steder: `const MOBIL` i p1_core.js og i style.css.
+
+    JS'en folder sidebaren sammen under MOBIL px; CSS'en goer den til en
+    overlay under sit eget tal. Er de ude af trit, folder menuknappen sidebaren
+    paa en iPad, hvor CSS'en stadig tegner desktop (Kokkeri v20).
+
+    Afgraensningen - hvad der TAELLER som et skal-brudpunkt:
+      * Kun betingelser i en `@media`-prelude. `max-width:` som EGENSKAB
+        (indholdsspalter, `--spalte`, `.focustitle`) er ikke et brudpunkt og
+        ses aldrig, fordi vi kun kigger mellem `@media` og `{`.
+      * Kommentarer fjernes foerst - de naevner baade 760 og "max-width".
+      * `(max-width: Npx)` skal vaere MOBIL. Hver max-width-regel i filen er
+        "mobil-layoutet"; en undtagelse skal staa i INDHOLDS_BRUDPUNKTER.
+      * `(min-width: Npx)` skal vaere MOBIL+1 (komplementet: "kun over
+        graensen", fx body.navskjult), eller staa i INDHOLDS_BRUDPUNKTER.
+      * Andre enheder (em/rem) og intervalsyntaks (`width <= 900px`) afvises:
+        dem kan vi ikke sammenligne, og saa ville tjekket vaere blindt for dem.
+    """
+    with open(os.path.join(PARTS, 'p1_core.js'), encoding='utf8') as fh:
+        fund = re.findall(r'^const MOBIL = (\d+);', fh.read(), re.M)
+    if len(fund) != 1:
+        fejl('kunne ikke finde præcis én `const MOBIL = N;` i app/parts/p1_core.js')
+    mobil = int(fund[0])
+
+    with open(os.path.join(PUBLIC, 'style.css'), encoding='utf8') as fh:
+        # Kommentaren erstattes af sine egne linjeskift, saa linjenumrene
+        # i fejlbeskederne stadig peger ind i den rigtige fil.
+        css = re.sub(r'/\*.*?\*/', lambda k: '\n' * k.group(0).count('\n'),
+                     fh.read(), flags=re.S)
+    skal = 0
+    for m in re.finditer(r'@media\b([^{]*)\{', css):
+        prelude = m.group(1)
+        linje = css.count('\n', 0, m.start()) + 1
+        if re.search(r'\bwidth\s*[<>]', prelude):
+            fejl(f'style.css:{linje}: intervalsyntaks i @media{prelude}- '
+                 'skriv max-width/min-width, saa mobilgraense-tjekket kan se den')
+        for egenskab, vaerdi, enhed in re.findall(
+                r'\((max-width|min-width)\s*:\s*([\d.]+)\s*([a-z%]*)\s*\)', prelude):
+            if enhed != 'px':
+                fejl(f'style.css:{linje}: @media ({egenskab}: {vaerdi}{enhed}) - kun px kan '
+                     'sammenlignes med MOBIL')
+            px = float(vaerdi)
+            if px.is_integer() and (egenskab, int(px)) in INDHOLDS_BRUDPUNKTER:
+                continue
+            forventet = mobil if egenskab == 'max-width' else mobil + 1
+            if px != forventet:
+                fejl(f'style.css:{linje}: @media ({egenskab}: {vaerdi}px) passer ikke med '
+                     f'MOBIL = {mobil} i p1_core.js (forventet {forventet}px). Ret den ene, '
+                     'eller - hvis reglen handler om indhold - skriv den i INDHOLDS_BRUDPUNKTER')
+            skal += 1
+    # Et tjek, der intet fandt, har intet bevist - fx hvis regex'en gled.
+    if skal == 0:
+        fejl('fandt ingen skal-brudpunkter i style.css - mobilgraense-tjekket er blindt')
+    print(f'  mobilgraense: {skal} @media-regler stemmer med MOBIL = {mobil}')
 
 
 def tjek_git(filer):
