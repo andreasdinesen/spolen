@@ -6,7 +6,7 @@ gameskill:
     Henter metadata fra TMDB, viser hvor titlen kan streames, importerer historik fra Trakt, Plex, Letterboxd og Netflix,
     og deler praecis det, du vaelger, med resten af husstanden. Egen SQLite-database, ingen eksterne afhaengigheder.
   author: andreas
-  version: 23
+  version: 24
   icon: app
   docker:
     image: '{{NODE_IMAGE}}'
@@ -29,47 +29,62 @@ gameskill:
     hint: Tom = hent nyeste udgivelse fra GitHub ved hver genstart. Et tal (fx 21) laaser til praecis den udgave.
   install:
     image: '{{NODE_IMAGE}}'
-    script: "set -eu\necho \"Installerer spolen (startsnor v23) ...\"\necho \"Node: $(node --version)\"\n\necho \"Henter app-koden\
-      \ fra GitHub ...\"\nrm -rf /tmp/spolen-hent\nmkdir -p /tmp/spolen-hent\nnode -e 'const https=require(\"https\"),zlib=require(\"\
-      zlib\");const U=\"https://codeload.github.com/andreasdinesen/spolen/tar.gz/refs/tags/v23\";function d(m){console.error(\"\
+    script: "set -eu\necho \"Installerer spolen (startsnor v24) ...\"\necho \"Node: $(node --version)\"\n\necho \"Henter app-koden\
+      \ fra GitHub ...\"\nrm -rf .spolen-ny\nmkdir -p .spolen-ny\nnode -e 'const https=require(\"https\"),zlib=require(\"\
+      zlib\");const U=\"https://codeload.github.com/andreasdinesen/spolen/tar.gz/refs/tags/v24\";function d(m){console.error(\"\
       [fejl] \"+m);console.error(\"Adresse: \"+U);console.error(\"Repoet er offentligt, saa en 404 betyder, at adressen ikke\
       \ findes - tjek at taggen er pushet.\");process.exit(1);}function hent(u,n){const h={\"user-agent\":\"spolen-installer\"\
       };https.get(u,{headers:h},(r)=>{if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){if(n<=0)return d(\"for mange\
       \ omdirigeringer\");r.resume();return hent(new URL(r.headers.location,u).toString(),n-1);}if(r.statusCode!==200)return\
       \ d(\"GitHub svarede \"+r.statusCode);const g=zlib.createGunzip();g.on(\"error\",(e)=>d(\"arkivet kunne ikke pakkes\
       \ ud: \"+e.message));r.pipe(g).pipe(process.stdout);}).on(\"error\",(e)=>d(\"kunne ikke naa GitHub: \"+e.message));}hent(U,3);'\
-      \ > /tmp/spolen-hent/app.tar\ntar x -C /tmp/spolen-hent -f /tmp/spolen-hent/app.tar\n\n# Mappenavnet i et GitHub-arkiv\
+      \ > .spolen-ny/app.tar\ntar x -C .spolen-ny -f .spolen-ny/app.tar\nrm -f .spolen-ny/app.tar\n\n# Mappenavnet i et GitHub-arkiv\
       \ er <repo>-<ref uden v>, og arkivet begynder\n# med en pax_global_header-post. Ingen af delene gaettes: find den app-mappe,\n\
-      # der FINDES.\nNY=$(find /tmp/spolen-hent -maxdepth 2 -type d -name app | head -n 1)\nif [ -z \"$NY\" ] || [ ! -f \"\
-      $NY/server.js\" ]; then\n  echo \"[fejl] arkivet fra GitHub indeholder ingen app/server.js\"\n  exit 1\nfi\nrm -rf app\n\
-      mv \"$NY\" app\nrm -rf /tmp/spolen-hent\n\necho \"Filer udpakket:\"\nls -1 app app/public\necho \"Klar. Start serveren\
-      \ i panelet - den henter selv nyeste\"\necho \"udgave (eller den, KODE_VERSION laaser til), foer den starter.\"\n"
+      # der FINDES.\nNY=$(find .spolen-ny -maxdepth 2 -type d -name app | head -n 1)\nif [ -z \"$NY\" ] || [ ! -f \"$NY/server.js\"\
+      \ ]; then\n  echo \"[fejl] arkivet fra GitHub indeholder ingen app/server.js\"\n  exit 1\nfi\nrm -rf .spolen-gammel\n\
+      if [ -d app ]; then mv app .spolen-gammel; fi\nmv \"$NY\" app\nrm -rf .spolen-ny .spolen-gammel\n\necho \"Filer udpakket:\"\
+      \nls -1 app app/public\necho \"Klar. Start serveren i panelet - den henter selv nyeste\"\necho \"udgave (eller den,\
+      \ KODE_VERSION laaser til), foer den starter.\"\n"
   update:
     image: '{{NODE_IMAGE}}'
     label: Opdater spolen
-    script: "set -eu\necho \"Opdaterer spolen ...\"\necho \"Node: $(node --version)\"\n\nif [ -f app/kilde.js ]; then\n  #\
-      \ Panelet templaterer variabler ind i scriptets TEKST, og de findes\n  # OGSAA som env i containeren. Hvilken af delene\
-      \ der sker, er ikke\n  # bevist (doda, 2026-09-03), saa vi proever skabelonen og falder tilbage\n  # til env, hvis den\
-      \ staar utemplateret. En laasning maa ikke kunne tabes\n  # paa en antagelse om, hvad panelet goer.\n  K=\"{{KODE_VERSION}}\"\
-      \n  case \"$K\" in\n    '') : ;;\n    seneste|latest|[0-9]*) : ;;\n    *) K=\"${KODE_VERSION:-}\" ;;\n  esac\n  echo\
-      \ \"Oensket udgave: ${K:-nyeste}\"\n  KODE_VERSION=\"$K\" node app/kilde.js\nelse\n  echo \"Henter app-koden fra GitHub\
-      \ ...\"\n  rm -rf /tmp/spolen-hent\n  mkdir -p /tmp/spolen-hent\n  node -e 'const https=require(\"https\"),zlib=require(\"\
-      zlib\");const U=\"https://codeload.github.com/andreasdinesen/spolen/tar.gz/refs/tags/v23\";function d(m){console.error(\"\
-      [fejl] \"+m);console.error(\"Adresse: \"+U);console.error(\"Repoet er offentligt, saa en 404 betyder, at adressen ikke\
-      \ findes - tjek at taggen er pushet.\");process.exit(1);}function hent(u,n){const h={\"user-agent\":\"spolen-installer\"\
-      };https.get(u,{headers:h},(r)=>{if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){if(n<=0)return d(\"for mange\
-      \ omdirigeringer\");r.resume();return hent(new URL(r.headers.location,u).toString(),n-1);}if(r.statusCode!==200)return\
+    script: "set -eu\necho \"Opdaterer spolen ...\"\necho \"Node: $(node --version)\"\n\n# Redningen, ordret som i startup.\
+      \ Knappen koerer uden om opstarten, saa den\n# skal kunne det samme: ligger den gamle app under .spolen-gammel efter\
+      \ en\n# afbrudt udskiftning, skal den tilbage, FOER vi rydder noget som helst.\nif [ ! -f app/server.js ] && [ -f .spolen-gammel/server.js\
+      \ ]; then\n  rm -rf app\n  mv .spolen-gammel app\n  echo \"[kode] app/ sat tilbage efter en afbrudt udskiftning\"\n\
+      fi\n\n# Laasen. `mkdir` er atomisk paa alle filsystemer - `[ -d ] && mkdir` har et\n# hul imellem de to. Den staar om\
+      \ HELE scriptet, ikke inde i else-grenen:\n# fra v23 er kilde.js-grenen den almindelige, og to samtidige kilde.js kan\n\
+      # bytte app/ ud under hinanden. En laas, der beskytter den gren, der snart\n# aldrig bruges, er ingen laas. (Andreas\
+      \ trykkede to gange paa otte sekunder\n# i Sagu - knappen kan trykkes igen, mens den koerer.)\nif ! mkdir .spolen-laas\
+      \ 2>/dev/null; then\n  echo \"[fejl] en anden opdatering er allerede i gang.\"\n  echo \"Vent til den er faerdig, eller\
+      \ genstart spolen og proev igen.\"\n  exit 1\nfi\n# En fejlet hentning er den ALMINDELIGE fejl - nettet blinker, taggen\n\
+      # mangler. En laas, der overlever den, goer knappen doed for altid.\ntrap 'rm -rf .spolen-laas .spolen-ny' EXIT INT\
+      \ TERM\n\nif [ -f app/kilde.js ]; then\n  # Panelet templaterer variabler ind i scriptets TEKST, og de findes\n  # OGSAA\
+      \ som env i containeren. Hvilken af delene der sker, er ikke\n  # bevist (doda, 2026-09-03), saa vi proever skabelonen\
+      \ og falder tilbage\n  # til env, hvis den staar utemplateret. En laasning maa ikke kunne tabes\n  # paa en antagelse\
+      \ om, hvad panelet goer.\n  K=\"{{KODE_VERSION}}\"\n  case \"$K\" in\n    '') : ;;\n    seneste|latest|[0-9]*) : ;;\n\
+      \    *) K=\"${KODE_VERSION:-}\" ;;\n  esac\n  echo \"Oensket udgave: ${K:-nyeste}\"\n  KODE_VERSION=\"$K\" node app/kilde.js\n\
+      else\n  echo \"Henter app-koden fra GitHub ...\"\n  rm -rf .spolen-ny\n  mkdir -p .spolen-ny\n  node -e 'const https=require(\"\
+      https\"),zlib=require(\"zlib\");const U=\"https://codeload.github.com/andreasdinesen/spolen/tar.gz/refs/tags/v24\";function\
+      \ d(m){console.error(\"[fejl] \"+m);console.error(\"Adresse: \"+U);console.error(\"Repoet er offentligt, saa en 404\
+      \ betyder, at adressen ikke findes - tjek at taggen er pushet.\");process.exit(1);}function hent(u,n){const h={\"user-agent\"\
+      :\"spolen-installer\"};https.get(u,{headers:h},(r)=>{if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){if(n<=0)return\
+      \ d(\"for mange omdirigeringer\");r.resume();return hent(new URL(r.headers.location,u).toString(),n-1);}if(r.statusCode!==200)return\
       \ d(\"GitHub svarede \"+r.statusCode);const g=zlib.createGunzip();g.on(\"error\",(e)=>d(\"arkivet kunne ikke pakkes\
       \ ud: \"+e.message));r.pipe(g).pipe(process.stdout);}).on(\"error\",(e)=>d(\"kunne ikke naa GitHub: \"+e.message));}hent(U,3);'\
-      \ > /tmp/spolen-hent/app.tar\n  tar x -C /tmp/spolen-hent -f /tmp/spolen-hent/app.tar\n\n  # Mappenavnet i et GitHub-arkiv\
-      \ er <repo>-<ref uden v>, og arkivet begynder\n  # med en pax_global_header-post. Ingen af delene gaettes: find den\
-      \ app-mappe,\n  # der FINDES.\n  NY=$(find /tmp/spolen-hent -maxdepth 2 -type d -name app | head -n 1)\n  if [ -z \"\
-      $NY\" ] || [ ! -f \"$NY/server.js\" ]; then\n    echo \"[fejl] arkivet fra GitHub indeholder ingen app/server.js\"\n\
-      \    exit 1\n  fi\n  rm -rf app\n  mv \"$NY\" app\n  rm -rf /tmp/spolen-hent\nfi\n\necho \"App-filerne er skiftet ud.\
-      \ Databasen i /data er uroert.\"\necho \"Genstart spolen, saa serveren koerer den nye kode.\"\n"
+      \ > .spolen-ny/app.tar\n  tar x -C .spolen-ny -f .spolen-ny/app.tar\n  rm -f .spolen-ny/app.tar\n\n  # Mappenavnet i\
+      \ et GitHub-arkiv er <repo>-<ref uden v>, og arkivet begynder\n  # med en pax_global_header-post. Ingen af delene gaettes:\
+      \ find den app-mappe,\n  # der FINDES.\n  NY=$(find .spolen-ny -maxdepth 2 -type d -name app | head -n 1)\n  if [ -z\
+      \ \"$NY\" ] || [ ! -f \"$NY/server.js\" ]; then\n    echo \"[fejl] arkivet fra GitHub indeholder ingen app/server.js\"\
+      \n    exit 1\n  fi\n  rm -rf .spolen-gammel\n  if [ -d app ]; then mv app .spolen-gammel; fi\n  mv \"$NY\" app\n  rm\
+      \ -rf .spolen-ny .spolen-gammel\nfi\n\necho \"App-filerne er skiftet ud. Databasen i /data er uroert.\"\necho \"\"\n\
+      echo \"============================================\"\necho \"  GENSTART SPOLEN NU.\"\necho \"  Filerne er skiftet ud,\
+      \ men serveren koerer\"\necho \"  stadig den gamle kode, indtil den genstartes.\"\necho \"============================================\"\
+      \n"
   startup:
     command: "if [ ! -f app/server.js ] && [ -f .spolen-gammel/server.js ]; then\n  rm -rf app\n  mv .spolen-gammel app\n\
-      \  echo \"[kode] app/ sat tilbage efter en afbrudt udskiftning\"\nfi\nif [ -f app/kilde.js ]; then\n  node app/kilde.js\
+      \  echo \"[kode] app/ sat tilbage efter en afbrudt udskiftning\"\nfi\nif [ -d .spolen-laas ]; then\n  rm -rf .spolen-laas\
+      \ .spolen-ny\n  echo \"[kode] en strandet opdateringslaas er ryddet\"\nfi\nif [ -f app/kilde.js ]; then\n  node app/kilde.js\
       \ || echo \"[kode] advarsel: opdateringen kunne ikke koeres\"\nelse\n  echo \"[kode] denne udgave henter ikke sig selv\
       \ - brug Opdater spolen i panelet\"\nfi\nif node -e \"require('node:sqlite')\" >/dev/null 2>&1; then\n  exec node app/server.js\n\
       else\n  exec node --experimental-sqlite app/server.js\nfi\n"

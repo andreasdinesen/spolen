@@ -26,6 +26,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { scriptet } = require('./yamlskript.js');
+
 const ROD = path.join(__dirname, '..');
 const fil = (...dele) => fs.readFileSync(path.join(ROD, ...dele), 'utf8');
 
@@ -34,40 +36,6 @@ function tal(tekst, re, hvor) {
   const m = tekst.match(re);
   assert.ok(m, `kunne ikke finde versionsnummeret i ${hvor}`);
   return Number(m[1]);
-}
-
-/**
- * Traekker et af runens scripts UD af YAML'en og pakker det ud til den
- * shell, panelet faktisk koerer.
- *
- * Det er ikke pedanteri: pyyaml skriver lange scripts som ét dobbelt-
- * citeret scalar med `\n` for linjeskift, `\"` for anfoerselstegn og
- * ombrydning midt i linjerne. Et regulaert udtryk over den tekst rammer
- * derfor tilfaeldigt - `node app/kilde.js` findes, men `K="$K"` goer ikke,
- * fordi anfoerselstegnene staar escaped og linjen maaske er brudt paa
- * midten. Foerste udgave af proeven her var groen paa det ene og roed paa
- * det andet, uden at noget var galt med runen.
- */
-function scriptet(yamlTekst, sektion, noegle) {
-  const fra = yamlTekst.indexOf(`\n  ${sektion}:\n`);
-  assert.ok(fra > 0, `kunne ikke finde ${sektion}: i runen`);
-  const start = yamlTekst.indexOf(`${noegle}: "`, fra) + noegle.length + 2;
-  assert.ok(start > fra, `kunne ikke finde ${noegle}: under ${sektion}:`);
-  let i = start + 1;
-  for (; i < yamlTekst.length; i += 1) {   // find det AFSLUTTENDE anfoerselstegn
-    if (yamlTekst[i] === '\\') { i += 1; continue; }
-    if (yamlTekst[i] === '"') break;
-  }
-  const raa = yamlTekst.slice(start, i + 1)
-    // pyyaml bryder en lang linje med `\` til sidst. Skal der staa et
-    // MELLEMRUM paa brudstedet, begynder naeste linje med et escaped
-    // mellemrum (`\ `) - og det er ikke en gyldig JSON-escape, saa det skal
-    // vaek FOER de almindelige brud, ikke efter.
-    .replace(/\\\n\s*\\ /g, ' ')
-    .replace(/\\\n\s*/g, '')
-    .replace(/\n\s*/g, ' ')
-    .replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
-  return JSON.parse(raa);        // resten er JSON-escapes
 }
 
 const appVersion = () => tal(fil('app', 'parts', 'p1_core.js'),

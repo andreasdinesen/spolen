@@ -86,6 +86,22 @@ Arven er hentet fra to steder, og det er allerede fundet — det behøver ikke f
      ellers godkendes et halvt arkiv, og containeren dør med MODULE_NOT_FOUND.
   4. Advarsler i `kilde.js` skriver **aldrig** `[fejl]` — panelets watcher tæller de
      linjer og ville notificere, hver gang nettet blinkede.
+- **`update:`-scriptets else-gren er lige så farlig som `kilde.js`.** Den bruges kun,
+  når `kilde.js` ikke findes — altså ved den ene opgradering, hele mekanikken handler
+  om, og fejl dér kan `kilde.js` ikke rette, for den er der ikke. Sagu lå nede i ti
+  timer på præcis den funktion (2026-09-04). Reglerne er de samme som i `kilde.js`:
+  ingen `/tmp`, to `rename`, og den gamle app **flyttet** til `.spolen-gammel` frem
+  for slettet. `tjek_scripts()` i build'et og `tests/opdatering.test.js` vogter begge
+  dele — prøven kører **panelets eget script**, hevet ud af YAML'en.
+- **Knappen genstarter ikke serveren.** Panelets `app-update` svarer 202 og lader
+  processen køre videre på de nye filer. Derfor slutter scriptet med en ramme, der
+  beder om en genstart — og en prøve holder den på plads som **sidste** linjer.
+- **Rækkefølgen i `update:`: `if [ -f app/kilde.js ]` FØRST.** Henter man startsnoren
+  først og kører `kilde.js` bagefter, nedgraderer hvert tryk appen til runens tag —
+  og fejler nettet i andet trin, bliver den liggende der, tavst (tovo, 2026-09-04).
+- **Låsen er `mkdir .spolen-laas`** (atomisk; `[ -d ] && mkdir` har et hul), om **hele**
+  scriptet, og frigivet af en `trap`. En strandet lås ryddes af `startup`, fordi
+  `trap` ikke når at køre ved et hårdt drab.
 - **Commit og push kræver et udtrykkeligt ja.** Et push er en udgivelse.
 - **Repoet er OFFENTLIGT** (Andreas, 2026-08-28), som dodas og Sagus. **Hver ændring
   auditeres før push:** ingen rigtige mailadresser, værtsnavne eller tokens.

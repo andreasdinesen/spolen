@@ -75,8 +75,12 @@ Reload** først; ellers er en genstart nok.
 | Panelet | Hvornår |
 |---|---|
 | Genstart | Ved hver ny udgave — det normale |
-| **Opdater spolen** | Vil du hente uden at genstarte (den bruger samme mekanisme) |
+| **Opdater spolen** | Henter filerne nu. **Genstart bagefter** — knappen skifter filer, den genstarter ikke serveren |
 | Runes → Reload | Kun når runens egen version er bumpet |
+
+Knappen kan kun køre én ad gangen: trykker du to gange, siger den anden
+*"en anden opdatering er allerede i gang"* i stedet for at rode i de samme
+filer. Låsen frigives af sig selv, også hvis hentningen fejler.
 
 ### Hvis en udgave er dårlig
 

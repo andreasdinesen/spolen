@@ -61,7 +61,7 @@ GITHUB_REPO = 'spolen'
 # staar i KODE_VERSION - men den skal vaere en udgave, der KAN starte, og
 # den skal vaere >= FOERSTE_MED_KILDE, ellers lander en ny installation paa
 # kode uden kilde.js, og saa opdaterer en genstart ingenting.
-RUNE_VERSION = 23
+RUNE_VERSION = 24
 
 # Panelet templaterer {{STORE_BOGSTAVER}} - staar det i en kildefil, bliver
 # filen aendret bag om ryggen paa os. Og heredoc-markoeren ville lukke
@@ -254,25 +254,60 @@ def hent_krop(version):
     )
 
 
+# Redningen efter en afbrudt udskiftning. Staar ORDRET tre steder - i
+# startup, i update og som forklaring her - fordi de tre veje ind i app/ er
+# uafhaengige: opstarten, knappen og kilde.js. En rednings-linje, der kun
+# staar ét af stederne, daekker kun den vej, nogen taenkte paa.
+REDNING = """if [ ! -f app/server.js ] && [ -f .spolen-gammel/server.js ]; then
+  rm -rf app
+  mv .spolen-gammel app
+  echo "[kode] app/ sat tilbage efter en afbrudt udskiftning"
+fi
+"""
+
+
 def hente_trin(version):
-    """Faelles krop for install og update. ASCII i echo-linjerne (§2)."""
+    """Faelles krop for install og update. ASCII i echo-linjerne (§2).
+
+    Det her er den vej, der KUN bruges, naar app/kilde.js ikke findes: en
+    foerste installation, eller en server fra foer v23. Netop derfor er den
+    farlig at slaekke paa - det er den ene opgradering, hele mekanikken
+    handler om, og fejl her kan ikke rettes af kilde.js, som jo ikke er der.
+    Sagu laa nede i ti timer paa praecis den her funktion (2026-09-04).
+
+    Tre ting, og de er de SAMME tre, kilde.js er bygget udenom:
+
+      * **Ikke /tmp.** En fast temp-sti deles af to samtidige koersler, saa
+        den ene rydder, mens den anden pakker ud. Og `mv` fra /tmp til
+        arbejdsmappen er en KOPI over to filsystemer, som kan afbrydes paa
+        midten. To `rename` inden for samme filsystem kan ikke.
+      * **Den gamle app FLYTTES, den slettes ikke.** `rm -rf app` foer `mv`
+        aabner et vindue helt uden app/ - og dermed uden kilde.js til at
+        redde sig selv. Flyttet til .spolen-gammel er den derimod praecis
+        der, hvor baade startup og update leder efter den.
+      * **Flyttet som en HELHED**, ikke pakket ovenpaa: filer, der er slettet
+        i en ny udgave, bliver ikke liggende (Beanledger v30). Det var det,
+        `rm -rf app` var der for, og den egenskab er bevaret - ikke tabt.
+    """
     return f"""echo "Henter app-koden fra GitHub ..."
-rm -rf /tmp/spolen-hent
-mkdir -p /tmp/spolen-hent
-node -e '{hent_krop(version)}' > /tmp/spolen-hent/app.tar
-tar x -C /tmp/spolen-hent -f /tmp/spolen-hent/app.tar
+rm -rf .spolen-ny
+mkdir -p .spolen-ny
+node -e '{hent_krop(version)}' > .spolen-ny/app.tar
+tar x -C .spolen-ny -f .spolen-ny/app.tar
+rm -f .spolen-ny/app.tar
 
 # Mappenavnet i et GitHub-arkiv er <repo>-<ref uden v>, og arkivet begynder
 # med en pax_global_header-post. Ingen af delene gaettes: find den app-mappe,
 # der FINDES.
-NY=$(find /tmp/spolen-hent -maxdepth 2 -type d -name app | head -n 1)
+NY=$(find .spolen-ny -maxdepth 2 -type d -name app | head -n 1)
 if [ -z "$NY" ] || [ ! -f "$NY/server.js" ]; then
   echo "[fejl] arkivet fra GitHub indeholder ingen app/server.js"
   exit 1
 fi
-rm -rf app
+rm -rf .spolen-gammel
+if [ -d app ]; then mv app .spolen-gammel; fi
 mv "$NY" app
-rm -rf /tmp/spolen-hent
+rm -rf .spolen-ny .spolen-gammel
 """
 
 
@@ -298,16 +333,40 @@ echo "udgave (eller den, KODE_VERSION laaser til), foer den starter."
 def opdater_script(version):
     """update:-knappen i panelet.
 
-    Den maa ALDRIG hente startsnorens tag, naar appen allerede er laengere
-    fremme: v23 oven i v40 er en nedgradering, ingen bad om. Findes
-    app/kilde.js, er den facit - den kender KODE_VERSION og henter praecis
-    den udgave, serveren ville hente ved en genstart. Startsnoren er kun
-    redningen, hvis app/ er vaek eller fra foer kilde.js fandtes.
+    Knappen skifter FILER. Den genstarter ikke serveren - panelets
+    app-update svarer 202 og lader processen koere videre paa den gamle kode
+    (maalt i Sagu, 2026-09-04, hvor der gik ti timer, foer nogen genstartede).
+    Derfor slutter scriptet med en ramme, ikke med en linje.
+
+    Rakkefolgen er vigtig: findes app/kilde.js, er DEN facit - den kender
+    KODE_VERSION og henter praecis den udgave, serveren ville hente ved en
+    genstart. Henter man startsnoren foerst og koerer kilde.js bagefter,
+    NEDGRADERER hvert tryk appen til runens tag, og slaar nettet fejl i andet
+    trin, bliver den liggende der - stille (tovo, 2026-09-04).
     """
     hent = textwrap.indent(hente_trin(version), '  ')
     return f"""set -eu
 echo "Opdaterer spolen ..."
 echo "Node: $(node --version)"
+
+# Redningen, ordret som i startup. Knappen koerer uden om opstarten, saa den
+# skal kunne det samme: ligger den gamle app under .spolen-gammel efter en
+# afbrudt udskiftning, skal den tilbage, FOER vi rydder noget som helst.
+{REDNING}
+# Laasen. `mkdir` er atomisk paa alle filsystemer - `[ -d ] && mkdir` har et
+# hul imellem de to. Den staar om HELE scriptet, ikke inde i else-grenen:
+# fra v23 er kilde.js-grenen den almindelige, og to samtidige kilde.js kan
+# bytte app/ ud under hinanden. En laas, der beskytter den gren, der snart
+# aldrig bruges, er ingen laas. (Andreas trykkede to gange paa otte sekunder
+# i Sagu - knappen kan trykkes igen, mens den koerer.)
+if ! mkdir .spolen-laas 2>/dev/null; then
+  echo "[fejl] en anden opdatering er allerede i gang."
+  echo "Vent til den er faerdig, eller genstart spolen og proev igen."
+  exit 1
+fi
+# En fejlet hentning er den ALMINDELIGE fejl - nettet blinker, taggen
+# mangler. En laas, der overlever den, goer knappen doed for altid.
+trap 'rm -rf .spolen-laas .spolen-ny' EXIT INT TERM
 
 if [ -f app/kilde.js ]; then
   # Panelet templaterer variabler ind i scriptets TEKST, og de findes
@@ -327,7 +386,12 @@ else
 {hent}fi
 
 echo "App-filerne er skiftet ud. Databasen i /data er uroert."
-echo "Genstart spolen, saa serveren koerer den nye kode."
+echo ""
+echo "============================================"
+echo "  GENSTART SPOLEN NU."
+echo "  Filerne er skiftet ud, men serveren koerer"
+echo "  stadig den gamle kode, indtil den genstartes."
+echo "============================================"
 """
 
 
@@ -410,12 +474,18 @@ def byg_yaml(version, rune_version):
                 #     starter - men et stakspor, der ikke er en fejl, bliver
                 #     liggende for evigt (tovo, 2026-09-03). Sig i stedet,
                 #     hvad vejen videre er.
+                #  2b. En strandet laas. update-scriptets `trap` naar ikke
+                #     at koere ved et haardt drab, og en laas, der bliver
+                #     liggende, goer knappen doed for altid. Prisen for at
+                #     rydde den her er, at en opdatering, der koerer i sin
+                #     EGEN container praecis mens appen starter, mister sin
+                #     laas - mindre end en knap, der aldrig virker igen.
                 #  3. Serveren, som foer. node:sqlite er stabil fra Node 24,
                 #     men flaget skal stadig kunne bruges paa et aeldre image.
-                'command': ('if [ ! -f app/server.js ] && [ -f .spolen-gammel/server.js ]; then\n'
-                            '  rm -rf app\n'
-                            '  mv .spolen-gammel app\n'
-                            '  echo "[kode] app/ sat tilbage efter en afbrudt udskiftning"\n'
+                'command': (REDNING
+                            + 'if [ -d .spolen-laas ]; then\n'
+                            '  rm -rf .spolen-laas .spolen-ny\n'
+                            '  echo "[kode] en strandet opdateringslaas er ryddet"\n'
                             'fi\n'
                             'if [ -f app/kilde.js ]; then\n'
                             '  node app/kilde.js || echo "[kode] advarsel: opdateringen kunne ikke koeres"\n'
@@ -465,6 +535,71 @@ def byg_yaml(version, rune_version):
                      'backup_first': True},
         }
     }
+
+
+def tjek_scripts(doc):
+    """Vagter paa de scripts, PANELET koerer - install, update og startup.
+
+    `tests/opdatering.test.js` koerer dem rigtigt, mod en lokal arkivserver.
+    Vagten her er billig og raaber TIDLIGERE: den fanger fejlen i build'et i
+    stedet for i en proeve, og den kan ikke glemmes, naar nogen redigerer en
+    f-streng. En vagt, der findes to steder, er billig - og den, der raaber
+    tidligst, er den bedste (Sagu, 2026-08-21).
+
+    Reglerne er skiftet UD, ikke slettet: den gamle var »install skal
+    indeholde `rm -rf app`«, saa filer fra en gammel udgave ikke blev
+    liggende (Beanledger v30). Den egenskab er bevaret - app/ flyttes nu vaek
+    som en HELHED - men sletningen aabnede et vindue uden app/, og dermed
+    uden kilde.js til at redde sig selv (Sagu laa nede ti timer, 2026-09-04).
+    """
+    g = doc['gameskill']
+    install = g['install']['script']
+    update = g['update']['script']
+    startup = g['startup']['command']
+
+    for navn, s in (('install', install), ('update', update)):
+        if '/tmp/' in s:
+            fejl(f'{navn}-scriptet pakker ud i /tmp - to samtidige koersler ville '
+                 'dele mappen, og `mv` derfra er en kopi over to filsystemer')
+        # `rm -rf app` er kun i orden ét sted: i redningen, hvor den rydder
+        # en halv app vaek umiddelbart FOER den gode hentes tilbage fra
+        # .spolen-gammel. Alle andre steder aabner den et vindue uden app/.
+        linjer = [x.strip() for x in s.splitlines()]
+        for i, linje in enumerate(linjer):
+            if linje != 'rm -rf app':
+                continue
+            naeste = next((x for x in linjer[i + 1:] if x), '')
+            if naeste != 'mv .spolen-gammel app':
+                fejl(f'{navn}-scriptet sletter app/ uden straks at saette en anden '
+                     'paa plads - et vindue helt uden app/, og dermed uden kilde.js')
+        if 'if [ -d app ]; then mv app .spolen-gammel; fi' not in s:
+            fejl(f'{navn}-scriptet flytter ikke den gamle app til side - '
+                 'saa daekker startup-redningen ikke denne vej')
+
+    laas = update.find('mkdir .spolen-laas')
+    gren = update.find('if [ -f app/kilde.js ]; then')
+    if laas < 0:
+        fejl('update-scriptet tager ingen laas - knappen kan trykkes to gange')
+    if gren < 0:
+        fejl('update-scriptet forgrener ikke paa app/kilde.js')
+    if laas > gren:
+        fejl('update tager laasen INDE i forgreningen - den skal om hele scriptet')
+    if 'trap ' not in update or '.spolen-laas' not in update.split('trap ')[1][:60]:
+        fejl('update frigiver ikke laasen med en trap - en fejlet hentning '
+             'ville goere knappen doed for altid')
+    if 'GENSTART SPOLEN NU' not in '\n'.join(update.strip().splitlines()[-8:]):
+        fejl('update slutter ikke med at bede om en genstart - knappen skifter '
+             'FILER og genstarter ikke serveren')
+
+    if '.spolen-gammel/server.js' not in update:
+        fejl('update-knappen mangler redningen af app/ - den koerer uden om '
+             'opstarten og skal kunne det samme')
+    if '.spolen-gammel/server.js' not in startup:
+        fejl('startup mangler redningen af app/')
+    if 'if [ -d .spolen-laas ]; then' not in startup:
+        fejl('startup rydder ikke en strandet laas - trap naar ikke at koere '
+             'ved et haardt drab')
+    print('  scripts: install, update og startup vogtet')
 
 
 def tjek_events(doc):
@@ -548,6 +683,7 @@ def main():
 
     doc = byg_yaml(version, RUNE_VERSION)
     tjek_events(doc)
+    tjek_scripts(doc)
     tekst = yaml.dump(doc, allow_unicode=False, sort_keys=False, width=120)
     # Valider ved at LAESE den igen - en YAML, panelet ikke kan parse, er
     # vaerre end ingen YAML.
