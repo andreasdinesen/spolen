@@ -62,6 +62,9 @@ const statistik = require('./shared/statistik.js');
 // Samme navneregel som fladen - shared/navn.js laegges ogsaa ind i app.js
 // af build_rune.py, saa der findes ÉN definition (2026-08-29).
 const { visNavn, findTitler } = require('./shared/navn.js');
+// Klient-IP'en til login-spaerrer, loefter og [sikkerhed]-linjer - aldrig
+// den foerste vaerdi i X-Forwarded-For, som klienten selv vaelger.
+const { klientIp } = require('./klientip.js');
 const trakt = require('./trakt.js');
 const plex = require('./plex.js');
 const mcpModul = require('./mcp.js');
@@ -747,11 +750,6 @@ function sessionCookie(req, token, maxAge) {
   return bits.join('; ');
 }
 
-function clientIp(req) {
-  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return fwd || req.socket.remoteAddress || 'ukendt';
-}
-
 /* ------------------------------------------------------------ http-svar */
 
 // Hashen af det inline tema-script i index.html. Beregnes ved OPSTART i stedet
@@ -1016,7 +1014,7 @@ function godkend(req, res, kraevetScope) {
   if (raaNoegle) {
     const token = findToken(raaNoegle);
     if (!token) {
-      logSecurity(`noegle-afvist ip=${clientIp(req)}`);
+      logSecurity(`noegle-afvist ip=${klientIp(req)}`);
       apiFejl(res, 401, 'invalid_key', 'That access key is not valid. It may have been revoked.');
       return null;
     }
@@ -3226,7 +3224,7 @@ async function haandterOauth(req, res, urlPath, query) {
   /* -------------------------- dynamisk registrering -------------------------- */
   if (urlPath === '/oauth/register') {
     if (req.method !== 'POST') { json(405, { error: 'method_not_allowed' }); return; }
-    if (!rateAllow(`oauthreg:${clientIp(req)}`, 20, 3600)) {
+    if (!rateAllow(`oauthreg:${klientIp(req)}`, 20, 3600)) {
       json(429, { error: 'too_many_requests' });
       return;
     }
@@ -3346,7 +3344,7 @@ async function haandterOauth(req, res, urlPath, query) {
   /* ---------------------------------- token ---------------------------------- */
   if (urlPath === '/oauth/token') {
     if (req.method !== 'POST') { json(405, { error: 'method_not_allowed' }); return; }
-    if (!rateAllow(`oauthtok:${clientIp(req)}`, 60, 3600)) {
+    if (!rateAllow(`oauthtok:${klientIp(req)}`, 60, 3600)) {
       json(429, { error: 'slow_down' });
       return;
     }
@@ -3645,7 +3643,7 @@ const ROUTES = {
   },
 
   'POST /api/register': async (req, res) => {
-    const ip = clientIp(req);
+    const ip = klientIp(req);
     if (!tilladRegistrering()) {
       logSecurity(`registrering-afvist ip=${ip}`);
       apiFejl(res, 403, 'registration_closed', 'Sign-up is closed on this server.');
@@ -3679,7 +3677,7 @@ const ROUTES = {
   },
 
   'POST /api/login': async (req, res) => {
-    const ip = clientIp(req);
+    const ip = klientIp(req);
     if (!rateAllow(`login:${ip}`, 20, 900)) {
       apiFejl(res, 429, 'rate_limited', 'Too many sign-in attempts — try again later.');
       return;
@@ -3752,7 +3750,7 @@ const ROUTES = {
     try {
       cred = webauthn.registerVerify(req, user, body);
     } catch (err) {
-      logSecurity(`passkey-registrering-fejl bruger=${user.username} ip=${clientIp(req)}: ${err.message}`);
+      logSecurity(`passkey-registrering-fejl bruger=${user.username} ip=${klientIp(req)}: ${err.message}`);
       apiFejl(res, 400, 'bad_passkey', err.message);
       return;
     }
@@ -3774,7 +3772,7 @@ const ROUTES = {
    * domaenet ("usernameless"). Brugeren findes af den noegle, der svarer.
    */
   'POST /api/passkeys/login/start': (req, res) => {
-    if (!rateAllow(`pklogin:${clientIp(req)}`, 30, 900)) {
+    if (!rateAllow(`pklogin:${klientIp(req)}`, 30, 900)) {
       apiFejl(res, 429, 'rate_limited', 'Too many attempts. Try again shortly.');
       return;
     }
@@ -3782,7 +3780,7 @@ const ROUTES = {
   },
 
   'POST /api/passkeys/login/finish': async (req, res) => {
-    const ip = clientIp(req);
+    const ip = klientIp(req);
     if (!rateAllow(`pklogin:${ip}`, 30, 900)) {
       apiFejl(res, 429, 'rate_limited', 'Too many attempts. Try again shortly.');
       return;
@@ -3874,7 +3872,7 @@ const ROUTES = {
     const kode = str(body.code, 12).replace(/\s+/g, '');
     const vindue = totp.tjek(hem, kode);
     if (vindue === null) {
-      logSecurity(`2fa-opsaetning-fejl bruger=${user.username} ip=${clientIp(req)}`);
+      logSecurity(`2fa-opsaetning-fejl bruger=${user.username} ip=${klientIp(req)}`);
       apiFejl(res, 400, 'bad_code', 'That code is not right. Check the clock on your phone.');
       return;
     }
@@ -3904,7 +3902,7 @@ const ROUTES = {
     const body = await readJsonBody(req);
     const row = db.prepare('SELECT password FROM users WHERE id = ?').get(user.id);
     if (!verifyPassword(typeof body.password === 'string' ? body.password : '', row.password)) {
-      logSecurity(`2fa-fra-fejl bruger=${user.username} ip=${clientIp(req)}`);
+      logSecurity(`2fa-fra-fejl bruger=${user.username} ip=${klientIp(req)}`);
       apiFejl(res, 401, 'bad_credentials', 'That is not your password.');
       return;
     }
@@ -5504,7 +5502,7 @@ const server = http.createServer(async (req, res) => {
        */
       const session = sessionUser(req);
       if (!feed || (session && session.id !== feed.user_id)) {
-        logSecurity(`ical-token-afvist ip=${clientIp(req)}`);
+        logSecurity(`ical-token-afvist ip=${klientIp(req)}`);
         res.writeHead(404, { 'Content-Type': 'text/plain', 'X-Content-Type-Options': 'nosniff' });
         res.end('Not found');
         return;

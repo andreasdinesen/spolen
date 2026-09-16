@@ -258,8 +258,8 @@ function tjekTrae(mappe, version) {
   const kraevede = [
     'server.js', 'public/index.html', 'public/app.js',
     'shared/beregn.js', 'shared/import.js', 'shared/navn.js', 'shared/statistik.js',
-    'mcp.js', 'oauth.js', 'plex.js', 'push.js', 'qr.js', 'tmdb.js', 'totp.js',
-    'trakt.js', 'webauthn.js',
+    'klientip.js', 'mcp.js', 'oauth.js', 'plex.js', 'push.js', 'qr.js', 'tmdb.js',
+    'totp.js', 'trakt.js', 'webauthn.js',
   ];
   for (const kraevet of kraevede) {
     if (!fs.existsSync(path.join(mappe, ...kraevet.split('/')))) {
