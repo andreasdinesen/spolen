@@ -2401,6 +2401,9 @@ a.item-flag:hover { color: var(--accent); }
 }
 .kalenderdag.idag .kalenderdato strong { color: var(--accent-text); }
 .kalenderdag.idag { border-top-color: var(--accent); }
+/* En dag uden afsnit staar der stadig, naar det er i dag - linjen holder den
+   fra at se ud som en overskrift, der mangler sit indhold. */
+.kalenderdag .tomdag { margin: 0; padding: 0 4px 4px; }
 .kalenderrag { grid-template-columns: 34px minmax(0, 1fr) auto; display: grid; gap: 10px; align-items: center; }
 .kalenderrag.set .omni-row-title { color: var(--muted); }
 .icalboks { margin-top: 32px; border-top: 1px solid var(--border-soft); padding-top: 8px; }

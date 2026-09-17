@@ -122,7 +122,7 @@ if (typeof module !== 'undefined' && module.exports) {
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 26;
+const APP_VERSION = 27;
 
 /* ---------------------------------------------------------------- tema */
 
@@ -3342,10 +3342,24 @@ function kalenderSide() {
 
   // Gruppér pr. dato. Map bevarer indsaettelsesorden, og serveren har
   // allerede sorteret - saa der skal ikke sorteres igen.
-  const dage = new Map();
+  let dage = new Map();
   for (const r of k.raekker) {
     if (!dage.has(r.airDate)) dage.set(r.airDate, []);
     dage.get(r.airDate).push(r);
+  }
+  // I dag skal staa i listen, ogsaa naar der ikke sendes noget: uden dagsdato
+  // kan man ikke se, hvad der er bagud, og hvad der er forude. Map husker
+  // indsaettelsesorden og kan ikke skyde ind, saa raekken bygges om - ISO-datoer
+  // sammenlignes som tekst, og det er praecis den orden, serveren sorterer i.
+  if (!dage.has(k.idag) && k.idag >= k.fra && k.idag <= k.til) {
+    const med = new Map();
+    let sat = false;
+    for (const [dato, liste] of dage) {
+      if (!sat && dato > k.idag) { med.set(k.idag, []); sat = true; }
+      med.set(dato, liste);
+    }
+    if (!sat) med.set(k.idag, []);
+    dage = med;
   }
 
   return el('div', {}, [
@@ -3357,7 +3371,9 @@ function kalenderSide() {
           el('strong', { text: dagTekst(dato, k.idag) }),
           el('span', { class: 'dim lille', text: dato }),
         ]),
-        el('div', { class: 'liste' }, liste.map(kalenderRaekke)),
+        liste.length
+          ? el('div', { class: 'liste' }, liste.map(kalenderRaekke))
+          : el('p', { class: 'dim lille tomdag', text: 'Nothing airing.' }),
       ]))),
     icalAfsnit(),
   ]);
