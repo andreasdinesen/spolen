@@ -283,9 +283,40 @@ test('Calendar og Up Next har byttet plads', () => {
  * det foerste sekund - og en tom startside ligner en app uden data.
  */
 test('kalenderen hentes ved opstart, ikke foerst ved klik', () => {
-  assert.match(APP, /await Promise\.all\(\[hentKalender\(\)/,
+  const i = APP.indexOf('const hentninger = [');
+  assert.ok(i > 0,
+    'opstartens hentninger hedder noget andet - proeven maaler ikke det, den tror');
+  const blok = APP.slice(i, APP.indexOf('await Promise.all(hentninger)', i));
+  assert.match(blok, /hentKalender\(\)/,
     'kalenderen hentes ikke ved opstart - saa er startsiden tom et oejeblik');
   // Up Next og biblioteket hentes stadig: menuen viser tal fra dem.
-  assert.match(APP, /hentKalender\(\), hentUpNext\(\)/,
-    'Up Next hentes ikke laengere ved opstart');
+  assert.match(blok, /hentUpNext\(\)/, 'Up Next hentes ikke laengere ved opstart');
+  // ... men kalenderen kun, naar der ER en noegle: uden kan svaret ikke ses,
+  // og saa er kaldet kun en forsinkelse paa login.
+  assert.match(blok, /harTmdb\(\)[^\n]*hentKalender\(\)/,
+    'kalenderen hentes ogsaa uden en TMDB-noegle');
+});
+
+/*
+ * Uden TMDB-noegle findes kalenderen ikke.
+ *
+ * Sendedatoerne kommer kun fra TMDB, saa siden ville staa tom hver eneste dag.
+ * Den skal vaere vaek BEGGE steder - i menuen og som view. Kun i menuen er
+ * ikke nok: state.view begynder paa 'calendar', saa uden vagten i tegnSide()
+ * lander enhver uden noegle paa en side, menuen ikke har.
+ */
+test('kalenderen er vaek - baade i menuen og som view - uden en TMDB-noegle', () => {
+  assert.match(APP, /SIDER\.filter\(\(s\) => s\.id !== 'calendar' \|\| harTmdb\(\)\)/,
+    'menuen viser stadig Calendar uden en noegle');
+  assert.match(APP, /state\.view === 'calendar' && !harTmdb\(\)/,
+    'viewet bliver staaende paa kalenderen uden en noegle');
+  /*
+   * Vagten skal staa FOER linjen, der tegner kalenderen. Staar den efter,
+   * er den der stadig - og siden bliver tegnet alligevel netop den gang,
+   * det gjaldt.
+   */
+  const vagt = APP.indexOf("if (state.view === 'calendar' && !harTmdb())");
+  const tegner = APP.indexOf("if (state.view === 'calendar') { skal(kalenderSide());");
+  assert.ok(vagt > 0 && tegner > vagt,
+    'vagten staar efter kalenderens egen linje i tegnSide()');
 });

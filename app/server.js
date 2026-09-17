@@ -4429,6 +4429,48 @@ const ROUTES = {
   },
 
   /*
+   * ÉN saesons afsnit for en titel, man endnu ikke har.
+   *
+   * Adskilt fra /api/preview, fordi prisen er en anden: overblikket er ét
+   * TMDB-kald, og det her er ét kald MERE pr. saeson, man folder ud. Havde
+   * de vaeret samlet, ville en serie paa ti saesoner koste elleve kald, hver
+   * gang nogen bare kiggede paa den.
+   *
+   * Der skrives INTET i databasen. Afsnit hoerer til installationens
+   * metadata, og den skrives kun, naar nogen faktisk tilfoejer titlen
+   * (sikrTitel) - ellers ville et kig i soegningen fylde cachen med serier,
+   * ingen foelger.
+   */
+  'GET /api/preview/season': async (req, res, ctx) => {
+    const g = godkend(req, res, 'read');
+    if (!g) return;
+    /*
+     * Begge parametre laeses som RAA tekst foerst.
+     *
+     * `tal()` klamper, og en MANGLENDE parameter er `null` -> Number(null) er
+     * 0 -> klampet op til minimum. Et kald uden `season` ville altsaa hente
+     * specials, og et uden `tmdbId` ville hente titel nr. 1. Kravet skal
+     * derfor staa paa teksten, ikke paa tallet.
+     */
+    const raaId = ctx.query.get('tmdbId');
+    const raaNr = ctx.query.get('season');
+    if (!/^\d{1,12}$/.test(raaId || '') || !/^\d{1,4}$/.test(raaNr || '')) {
+      apiFejl(res, 400, 'bad_request', 'tmdbId and season are required.');
+      return;
+    }
+    const tmdbId = tal(raaId, 1, 1e12);
+    const nr = tal(raaNr, 0, 1000);
+    // Samme kvote som overblikket: det er den samme slags nysgerrighed.
+    if (!rateAllow(`preview:${g.user.id}`, 200, 3600)) {
+      apiFejl(res, 429, 'rate_limited', 'Too many lookups. Try again shortly.');
+      return;
+    }
+    const afsnit = await tmdb.hentSaeson(tmdbNoegle(), tmdbId, nr,
+      { sprog: sprogFor(g.user.id) });
+    sendJson(res, 200, { season: nr, episodes: afsnit });
+  },
+
+  /*
    * Tilfoej en titel (K2).
    *
    * To ting sker: metadata skrives i den FAELLES cache, og brugerens EGEN

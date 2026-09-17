@@ -233,7 +233,49 @@ async function hentOverblik(noegle, kind, tmdbId, opts) {
     votes: t.vote_count || 0,
     collectionId: (t.belongs_to_collection && t.belongs_to_collection.id) || null,
     collectionName: (t.belongs_to_collection && t.belongs_to_collection.name) || null,
+    /*
+     * Saesonerne - men IKKE deres afsnit.
+     *
+     * De staar allerede i svaret paa `/tv/{id}`, saa listen koster ingenting
+     * ekstra. Afsnittene ville koste ét kald PR. SAESON (se hentSerie), og
+     * det er for meget at bruge paa en titel, man endnu kun kigger paa:
+     * de hentes én saeson ad gangen, naar man folder den ud.
+     *
+     * Saeson 0 er specials. Den beholdes her - i modsaetning til
+     * saesonlisten paa titelsiden er der ingen fremdrift at forstyrre, og
+     * det er en oplysning om serien.
+     */
+    seasons: erTv ? (t.seasons || [])
+      .filter((s) => Number.isInteger(s.season_number))
+      .map((s) => ({
+        season: s.season_number,
+        name: s.name || '',
+        episodeCount: s.episode_count || 0,
+        airDate: s.air_date || null,
+      }))
+      .sort((a, b) => (a.season === 0 ? 1 : b.season === 0 ? -1 : a.season - b.season))
+      : null,
   };
+}
+
+/**
+ * ÉN saesons afsnit - til den titel, man endnu ikke har tilfoejet.
+ *
+ * Skiller sig fra hentSerie ved med vilje IKKE at hente resten: den kaldes,
+ * naar nogen folder en saeson ud i overblikket, og skal koste ét kald.
+ */
+async function hentSaeson(noegle, tmdbId, nr, opts) {
+  const o = opts || {};
+  const s = await hent(noegle, `/tv/${Number(tmdbId)}/season/${Number(nr)}`,
+    { language: o.sprog || 'en-US' });
+  return (s.episodes || []).map((e) => ({
+    season: e.season_number,
+    number: e.episode_number,
+    name: e.name || '',
+    airDate: e.air_date || null,
+    runtime: e.runtime || null,
+    overview: e.overview || '',
+  }));
 }
 
 /**
@@ -441,5 +483,5 @@ async function hentProviders(noegle, kind, tmdbId, region) {
 
 module.exports = {
   TmdbFejl, erBearer, aar, billedUrl, PLAKAT_BREDDE,
-  soeg, findVedEksterntId, hentOverblik, hentUdbydere, hentSamling, hentAnbefalinger, hentSerie, hentFilm, hentTitel, hentProviders,
+  soeg, findVedEksterntId, hentOverblik, hentUdbydere, hentSamling, hentAnbefalinger, hentSerie, hentSaeson, hentFilm, hentTitel, hentProviders,
 };

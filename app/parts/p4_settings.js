@@ -171,7 +171,7 @@ function temaAfsnit() {
 }
 
 function tmdbAfsnit() {
-  const harNoegle = !!(state.config && state.config.tmdbKeySet);
+  const harNoegle = harTmdb();
   const felt = el('input', {
     type: 'password',
     /*

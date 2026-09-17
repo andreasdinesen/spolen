@@ -2343,6 +2343,29 @@ a.item-flag:hover { color: var(--accent); }
 .overblik-hoved .plakat { width: 120px; }
 .overblik-hoved > div > .dim { margin-top: 3px; }
 .overblik-resume { margin: 16px 0 4px; }
+/*
+ * Knapperne bliver liggende i bunden af kortet.
+ *
+ * Med saesonlisten kan kortet blive langt, og "Add to library" er det, man
+ * er kommet for. Uden dette ruller den vaek under den foerste saeson, man
+ * folder ud - og saa skal man rulle tilbage for at goere det, ruden er til.
+ * Den negative bund + samme baggrund som kortet daekker kortets padding, saa
+ * raekkerne ikke skinner igennem nedenunder.
+ */
+.overblik-kort .knaprad {
+  position: sticky;
+  bottom: -26px;
+  margin-top: 18px;
+  padding: 12px 0 26px;
+  background: var(--card);
+}
+
+/* Saesonerne i overblikket: samme liste som paa titelsiden, men uden
+   markér-knappen - titlen er ikke tilfoejet endnu. */
+.overblik-saesoner { margin-top: 18px; }
+.overblik-saesoner h4 { margin: 0 0 4px; }
+.overblik-saesoner .afsnitsrag { grid-template-columns: 62px minmax(0, 1fr) auto; }
+.saesonbesked { margin: 0; padding: 2px 4px 8px; }
 
 @media (max-width: 900px) {
   .overblik-hoved { grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }

@@ -221,17 +221,39 @@ function aabnTraeffer(r) {
 async function visOverblik(r) {
   const krop = el('div', { class: 'overblik' });
   const knaprad = el('div', { class: 'knaprad' });
+  /*
+   * Saesonernes tilstand hoerer til RUDEN, ikke til state.
+   *
+   * Ruden lever, til den lukkes, og saa er baade det udfoldede og de hentede
+   * afsnit uden vaerdi. Lagde de i state, ville de blive liggende og skulle
+   * ryddes et sted - og glemmes.
+   */
+  const aabne = new Set();
+  const afsnitCache = new Map();   // saesonnr -> afsnit[] | 'henter' | {fejl}
+  let sidste = r;                  // det, der sidst blev tegnet
+  let henterStadig = true;
   const luk = () => { bag.remove(); document.removeEventListener('keydown', paaTast); };
   const paaTast = (e) => { if (e.key === 'Escape') luk(); };
-  const bag = el('div', { class: 'modalbag', onclick: (e) => { if (e.target === bag) luk(); } }, [
-    el('div', { class: 'modal-card overblik-kort', role: 'dialog', 'aria-modal': 'true' }, [
-      krop, knaprad,
-    ]),
+  // Kortet - ikke ruden - er det, der RULLER (max-height + overflow i CSS).
+  // Det skal derfor kunne pilles ud igen, naar rullepositionen skal gemmes.
+  const kort = el('div', { class: 'modal-card overblik-kort', role: 'dialog', 'aria-modal': 'true' }, [
+    krop, knaprad,
   ]);
+  const bag = el('div', { class: 'modalbag', onclick: (e) => { if (e.target === bag) luk(); } },
+    [kort]);
   document.body.appendChild(bag);
   document.addEventListener('keydown', paaTast);
 
   const tegn = (d, henter) => {
+    sidste = d;
+    henterStadig = henter;
+    /*
+     * Husk rullepositionen. Hver udfoldning af en saeson tegner hele ruden
+     * forfra, og uden det her springer kortet til toppen, hver gang man
+     * aabner en saeson langt nede - netop den, man sad og kiggede paa
+     * (samme fejl som i skal(), Beanledger v24).
+     */
+    const rul = kort.scrollTop;
     krop.textContent = '';
     knaprad.textContent = '';
     krop.appendChild(el('div', { class: 'overblik-hoved' }, [
@@ -257,6 +279,13 @@ async function visOverblik(r) {
     krop.appendChild(el('p', { class: 'overblik-resume',
       text: d.overview || 'TMDB has no description for this one.' }));
     if (henter) krop.appendChild(el('p', { class: 'dim lille', text: 'Loading details…' }));
+    /*
+     * Saesonerne staar til sidst i kroppen - listen kan blive lang, og
+     * det, man foerst skal laese, er hvad serien ER. Knapperne ligger
+     * UNDER den i DOM'en, men klaeber til kortets bund i CSS'en, saa
+     * "Add to library" ikke ruller vaek under en udfoldet saeson.
+     */
+    if (d.seasons && d.seasons.length) krop.appendChild(saesonOverblik(d));
 
     knaprad.appendChild(el('button', {
       class: 'btn primary',
@@ -268,6 +297,82 @@ async function visOverblik(r) {
       },
     }));
     knaprad.appendChild(el('button', { class: 'btn ghost', text: 'Close', onclick: luk }));
+    kort.scrollTop = rul;
+  };
+
+  /*
+   * Saesonerne og deres afsnit - for en titel, man IKKE har.
+   *
+   * Titelsidens saesonliste kan ikke bruges her: den regner med afsnit fra
+   * databasen med et id, et "set"-flag og en knap at markere med. Her er der
+   * ingen af delene - titlen er ikke tilfoejet endnu. Men ordforraadet er
+   * det samme (.saeson, .saesonhoved, .afsnitsrag), saa de to lister ligner
+   * hinanden, og man ikke skal laere to slags.
+   *
+   * Afsnittene hentes FOERST, naar en saeson foldes ud, og huskes derefter i
+   * ruden: ét TMDB-kald pr. saeson, man faktisk kigger paa.
+   */
+  const saesonOverblik = (d) => {
+    const ud = el('div', { class: 'overblik-saesoner' }, [
+      el('h4', { text: 'Seasons' }),
+    ]);
+    for (const s of d.seasons) {
+      const aaben = aabne.has(s.season);
+      const hentet = afsnitCache.get(s.season);
+      ud.appendChild(el('section', { class: 'saeson' }, [
+        el('button', {
+          class: 'saesonhoved', 'aria-expanded': aaben ? 'true' : 'false',
+          onclick: () => {
+            if (aaben) { aabne.delete(s.season); tegn(sidste, henterStadig); return; }
+            aabne.add(s.season);
+            if (!afsnitCache.has(s.season)) hentSaeson(d, s.season);
+            tegn(sidste, henterStadig);
+          },
+        }, [
+          el('span', { class: 'saesonpil', text: aaben ? '▾' : '▸' }),
+          el('span', { text: s.season === 0 ? 'Specials' : `Season ${s.season}` }),
+          el('span', { class: 'dim lille', text:
+            `${s.episodeCount} episode${s.episodeCount === 1 ? '' : 's'}`
+            + (s.airDate ? ` · ${s.airDate.slice(0, 4)}` : '') }),
+        ]),
+        aaben ? saesonKrop(hentet) : null,
+      ]));
+    }
+    return ud;
+  };
+
+  const saesonKrop = (hentet) => {
+    if (hentet === 'henter' || hentet === undefined) {
+      return el('p', { class: 'dim lille saesonbesked', text: 'Loading episodes…' });
+    }
+    if (hentet && hentet.fejl) {
+      return el('p', { class: 'dim lille saesonbesked', text: hentet.fejl });
+    }
+    if (!hentet.length) {
+      return el('p', { class: 'dim lille saesonbesked', text: 'TMDB lists no episodes here.' });
+    }
+    return el('div', { class: 'afsnitsliste' }, hentet.map((e) => el('div', {
+      class: 'afsnitsrag',
+    }, [
+      el('span', { class: 'afsnitsmaerke', text: `S${e.season}E${e.number}` }),
+      // Ingen knap og ingen afsnitsrude: uden titlen i biblioteket er der
+      // hverken noget at markere eller et afsnits-id at slaa op paa.
+      el('span', { text: e.name || '—' }),
+      el('span', { class: 'dim lille', text: e.airDate || '' }),
+    ])));
+  };
+
+  const hentSaeson = async (d, nr) => {
+    afsnitCache.set(nr, 'henter');
+    try {
+      const svar = await api(`/preview/season?kind=tv&tmdbId=${d.tmdbId}&season=${nr}`);
+      afsnitCache.set(nr, svar.episodes || []);
+    } catch (err) {
+      afsnitCache.set(nr, { fejl: `Could not load: ${err.message}` });
+    }
+    // Ruden kan vaere lukket, mens TMDB svarede.
+    if (!bag.isConnected) return;
+    tegn(sidste, henterStadig);
   };
 
   // 1. Det vi allerede ved - med det samme.

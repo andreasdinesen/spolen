@@ -84,6 +84,29 @@ function tilslutNav() {
 /* Ingen "Search"-side laengere: soegefeltet staar i toppen paa ALLE sider,
    saa en soegning er noget man goer midt i noget andet - ikke et sted man
    gaar hen. */
+/*
+ * Kalenderen er TMDB's.
+ *
+ * Sendedatoer kommer KUN derfra - uden en noegle kan der hverken hentes
+ * afsnit eller foelges en serie, saa siden ville staa tom hver eneste dag og
+ * love et svar, appen ikke kan give. Uden noegle findes den derfor slet ikke:
+ * hverken i menuen eller som view (Andreas, 2026-09-17).
+ *
+ * Noeglen er INSTALLATIONENS (`getSetting('*', 'tmdb_key')`), ikke den
+ * enkelte brugers - derfor forsvinder og kommer siden tilbage for hele huset
+ * paa én gang.
+ */
+function harTmdb() { return !!(state.config && state.config.tmdbKeySet); }
+
+/*
+ * Hvor man lander, naar kalenderen ikke er der.
+ *
+ * Up Next og ikke biblioteket: uden noegle er ALT tomt, og Up Next' tomme rum
+ * er det eneste, der siger hvad man saa skal goere - "Add a TMDB key under
+ * Settings". Et tomt bibliotek siger bare, at det er tomt.
+ */
+const START_UDEN_TMDB = 'up-next';
+
 const SIDER = [
   /*
    * Kalenderen staar OEVERST og er startsiden (Andreas, 2026-09-02).
@@ -179,7 +202,7 @@ function skal(indhold) {
   rod.appendChild(app);
   app.appendChild(el('nav', { class: 'sidebar nav' }, [
     el('div', { class: 'brand' }, [ikon(IKONER.brand, { stoerrelse: 20 }), 'spolen']),
-    ...SIDER.map((s) => el('button', {
+    ...SIDER.filter((s) => s.id !== 'calendar' || harTmdb()).map((s) => el('button', {
       class: 'nav-item',
       // Dodas stylesheet markerer den aktive side paa aria-current, ikke paa
       // en klasse. Det er ogsaa det rigtige for en skaermlaeser.
@@ -710,6 +733,13 @@ async function hentDelinger() {
 }
 
 function tegnSide() {
+  /*
+   * Noeglen kan forsvinde, MENS man staar paa kalenderen - en anden i huset
+   * sletter den, eller man sletter den selv i Settings. Viewet foelger med,
+   * saa man aldrig bliver staaende paa en side, der ikke laengere er i menuen.
+   * Det er ogsaa vagten for startsiden: state.view begynder paa 'calendar'.
+   */
+  if (state.view === 'calendar' && !harTmdb()) state.view = START_UDEN_TMDB;
   if (state.view === 'sharing') { skal(delingsSide()); return; }
   if (state.view === 'up-next') { skal(upNextSide()); return; }
   if (state.view === 'library') { skal(bibliotekSide()); return; }
@@ -743,8 +773,13 @@ async function indlaes() {
      * Kalenderen hentes FOERST, fordi den er startsiden. Up Next og
      * biblioteket hentes stadig med: venstremenuen viser tal fra dem, og
      * skifter man over, skal siden ikke vaere tom et oejeblik.
+     *
+     * Uden TMDB-noegle findes kalenderen ikke, og saa hentes den heller ikke
+     * - et kald, hvis svar ingen kan se, er kun en forsinkelse paa login.
      */
-    await Promise.all([hentKalender(), hentUpNext(), hentDelinger(), hentBibliotek()]);
+    const hentninger = [hentUpNext(), hentDelinger(), hentBibliotek()];
+    if (harTmdb()) hentninger.unshift(hentKalender());
+    await Promise.all(hentninger);
     tegnSide();
     tilslutSkrivForAtSoege();
     tilslutNav();
