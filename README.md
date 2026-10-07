@@ -45,7 +45,7 @@ nul CDN** — det er sikkerhedsvalget: uden afhængigheder findes der ingen
 forsyningskæde at holde patchet.
 
 ```sh
-BIND_PORT=8912 DATA_DIR=/tmp/spolendata node app/server.js   # kør lokalt
+BIND_PORT=8915 DATA_DIR=/tmp/spolendata node app/server.js   # kør lokalt
 node --test tests/beregn.test.js                              # prøver
 python3 build_rune.py                                         # byg runen
 ```

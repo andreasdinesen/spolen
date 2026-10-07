@@ -10,7 +10,7 @@
  * installationen, men ikke sin historik. Auth-stakken og dataadgangen er
  * derfor tovos, ikke dodas - doda henter brugeren med "FROM users LIMIT 1".
  *
- * DE TRE DATAPLANER (se PLAN.md). Det er husets vigtigste beslutning:
+ * DE TRE DATAPLANER (se CLAUDE.md). Det er husets vigtigste beslutning:
  *
  *   1. METADATA (titles, episodes, providers) er INSTALLATIONENS og har
  *      derfor INGEN user_id. To husstandsmedlemmer, der foelger samme serie,
