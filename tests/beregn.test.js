@@ -204,3 +204,16 @@ test('naesteTjek: en udsendelse i FORTIDEN udloeser ikke dagligt tjek', () => {
   // blive tjekket hver dag for evigt.
   assert.equal(beregn.naesteTjek('Ended', '2020-01-01', NU), NU + 90 * DAG);
 });
+
+/* ------------------------------------------------------- afsnitsBesked */
+
+test('afsnitsBesked: i dag og i gaar meldes, alt andet ikke', () => {
+  assert.equal(beregn.afsnitsBesked(IDAG, IDAG), 'today');
+  assert.equal(beregn.afsnitsBesked('2026-08-27', IDAG), 'yesterday');
+  // Over en maanedsgraense - en strengsammenligning ville ikke klare den.
+  assert.equal(beregn.afsnitsBesked('2026-08-31', '2026-09-01'), 'yesterday');
+  assert.equal(beregn.afsnitsBesked('2026-08-26', IDAG), null, 'i forgaars er ikke nyt');
+  assert.equal(beregn.afsnitsBesked('2026-08-29', IDAG), null, 'i morgen er ikke sendt endnu');
+  assert.equal(beregn.afsnitsBesked(null, IDAG), null, 'afsnit uden dato');
+  assert.equal(beregn.afsnitsBesked('', IDAG), null);
+});

@@ -2994,14 +2994,57 @@ function vapidNoegler() {
 }
 
 /*
- * `sub`-feltet i VAPID skal vaere en mailto: eller en https-adresse - det er
+ * `sub`-feltet i VAPID skal vaere en mailto: eller en HTTPS-adresse - det er
  * push-tjenestens vej til at kontakte afsenderen. Vi har ingen mailadresse
- * at give, og maa ikke opfinde brugerens, saa vi bruger serverens egen
- * adresse.
+ * at give, og maa ikke opfinde brugerens, saa vi bruger appens egen adresse.
+ *
+ * DET ER IKKE EN DETALJE. Apple svarer en bar 403 `BadJwtToken` paa en
+ * `sub`, den ikke godtager - og indtil v29 faldt spolen tilbage til
+ * `mailto:spolen@localhost`, naar `public_url` ikke var sat. Saa tog Apple
+ * imod ingenting, og proeveknappen sagde »accepted nothing« (Andreas,
+ * 2026-10-09). doda havde loest det i forvejen: gem appens adresse, naar
+ * nogen tilmelder sig over https - tickeren har ingen request at spoerge.
+ *
+ * Kun https gemmes. localhost er et sikkert kontekst over almindelig http,
+ * saa en udvikler kunne ellers naa at gemme `http://localhost:8915` som
+ * afsender for de rigtige enheder (RUNE-ERFARINGER, Beanledger).
  */
 function vapidEmne() {
-  const d = getSetting('*', 'public_url', '');
-  return d ? d.replace(/\/+$/, '') : 'mailto:spolen@localhost';
+  for (const d of [getSetting('*', 'public_url', ''), getSetting('*', 'push_host', '')]) {
+    if (/^https:\/\/[^/]/.test(d || '')) return d.replace(/\/+$/, '');
+  }
+  return 'mailto:spolen@localhost';
+}
+
+/** Husk appens https-adresse til `sub` (se vapidEmne). */
+function huskPushVaert(req) {
+  if (!isHttps(req)) return;
+  const b = oauth.base(req);
+  if (b !== getSetting('*', 'push_host', '')) setSetting('*', 'push_host', b);
+}
+
+/*
+ * Nyttelasten - i to former paa én gang.
+ *
+ * `web_push: 8030` goer den til Declarative Web Push: kan browseren laese
+ * den (Safari paa iPhone), viser SYSTEMET notifikationen uden at vaekke
+ * service workeren. iOS vaekker ikke altid en worker for en push - doda
+ * brugte otte udgaver paa at opdage det (2026-09-07). Kan browseren ikke
+ * formatet, faar sw.js den samme nyttelast i `event.data` og viser den
+ * samme tekst.
+ *
+ * ALLE adresser skal vaere ABSOLUTTE. Systemet laeser nyttelasten uden en
+ * side at oploese `./icon-192.png` imod, og en streng parser kasserer saa
+ * hele notifikationen i tavshed.
+ */
+function pushNyttelast(titel, tekst, url, tag) {
+  const emne = vapidEmne();
+  const rod = emne.startsWith('https://') ? emne : null;
+  const abs = (sti) => { try { return rod ? new URL(sti, `${rod}/`).href : sti; } catch { return sti; } };
+  const n = { title: titel, body: tekst, navigate: abs(url || '/') };
+  if (rod) n.icon = abs('icon-192.png');
+  if (tag) n.tag = tag;
+  return { web_push: 8030, notification: n };
 }
 
 function pushAbonnementer(userId) {
@@ -3016,13 +3059,14 @@ function pushAbonnementer(userId) {
  * betyder, at browseren er afmeldt). Bliver de liggende, sender vi til dem
  * for evigt og faar en voksende fejlrate, der ikke betyder noget.
  */
-async function sendPush(userId, titel, tekst, url) {
+async function sendPush(userId, titel, tekst, url, tag) {
   const abon = pushAbonnementer(userId);
   if (!abon.length) return { sendt: 0, doede: 0, ingen: true };
   const v = vapidNoegler();
-  const krop = JSON.stringify({ title: titel, body: tekst, url: url || '/' });
+  const krop = JSON.stringify(pushNyttelast(titel, tekst, url, tag));
   let sendt = 0;
   let doede = 0;
+  let afvist = null;
   for (const a of abon) {
     const r = await pushModul.send(a, krop, v, vapidEmne());
     if (r.ok) {
@@ -3034,23 +3078,40 @@ async function sendPush(userId, titel, tekst, url) {
       db.prepare('DELETE FROM push_subs WHERE endpoint = ?').run(a.endpoint);
     } else {
       db.prepare('UPDATE push_subs SET fejl = fejl + 1 WHERE endpoint = ?').run(a.endpoint);
-      log(`push fejlede (${r.status}): ${r.fejl || ''}`);
+      log(`push fejlede (${r.status}): ${r.besked || r.fejl || ''}`);
+      if (!afvist) afvist = { status: r.status, besked: r.besked || r.fejl || null };
     }
   }
-  return { sendt, doede };
+  return { sendt, doede, afvist };
 }
 
 /*
  * Hvem skal have besked om hvad?
  *
- * Kun afsnit, der sendes I DAG, af serier brugeren FOELGER - og kun én gang
- * pr. afsnit. Uden det sidste ville det timevise job sende den samme besked
- * 24 gange paa en dag, og folk slaar notifikationer fra efter den anden.
+ * Nye afsnit (i dag eller i gaar, se beregn.afsnitsBesked) af serier
+ * brugeren FOELGER - og kun én gang pr. afsnit. Uden det sidste ville det
+ * timevise job sende den samme besked 24 gange paa en dag, og folk slaar
+ * notifikationer fra efter den anden.
+ *
+ * ÉN besked pr. serie, ikke pr. afsnit: en streamingtjeneste, der laegger
+ * en hel saeson ud paa én gang, maa ikke blive til otte notifikationer.
+ *
+ * Afsnit man ALLEREDE har set (Plex, Trakt, en markering), meldes ikke -
+ * det er ikke nyt for én, der har set det.
  */
+const PUSH_FRA_TIME = 8;   // ingen beskeder om natten (TZ = Europe/Copenhagen)
+
 async function pushOmNyeAfsnit() {
+  /*
+   * Jobbet tikker hver time - ogsaa kl. 00:01, hvor dagens afsnit ellers
+   * ville vaekke folk. Foer kl. 8 venter vi; det foerste tik derefter tager
+   * dem alle.
+   */
+  if (new Date(now() * 1000).getHours() < PUSH_FRA_TIME) return 0;
   const idag = beregn.isoDato(now());
   const sendteI = new Set(
     (getSetting('*', 'push_sendt', '') || '').split(',').filter(Boolean));
+  const foer = sendteI.size;
   let nye = 0;
   for (const u of db.prepare('SELECT id FROM users').all()) {
     if (getSetting(u.id, 'notify_new', '1') !== '1') continue;
@@ -3060,23 +3121,34 @@ async function pushOmNyeAfsnit() {
       if (tr.notifyNew === false) continue;
       const titel = hentTitel(tr.titleId);
       if (!titel || titel.kind !== 'tv') continue;
-      for (const e of hentAfsnit(tr.titleId)) {
-        if (e.airDate !== idag) continue;
+      const sete = seteAfsnit(u.id, titel.id);
+      const friske = [];
+      for (const e of hentAfsnit(titel.id)) {
+        const naar = beregn.afsnitsBesked(e.airDate, idag);
+        if (!naar) continue;
         const noegle = `${u.id}:${e.id}`;
         if (sendteI.has(noegle)) continue;
+        // Huskes ogsaa naar det er set: ellers ville det blive meldt, hvis
+        // visningen senere blev fjernet igen.
         sendteI.add(noegle);
-        nye++;
-        await sendPush(u.id,
-          titel.name,
-          `S${e.season}E${e.number}${e.name ? ` · ${e.name}` : ''} airs today`,
-          `/#title-${titel.id}`);
+        if (sete.has(e.id)) continue;
+        friske.push({ ...e, naar });
       }
+      if (!friske.length) continue;
+      nye += friske.length;
+      const e = friske[0];
+      const tekst = friske.length === 1
+        ? `S${e.season}E${e.number}${e.name ? ` · ${e.name}` : ''} `
+          + (e.naar === 'today' ? 'airs today' : 'aired yesterday')
+        : `${friske.length} new episodes, from S${e.season}E${e.number}`;
+      await sendPush(u.id, titel.name, tekst,
+        `/?titel=${encodeURIComponent(titel.id)}`, `titel-${titel.id}`);
     }
   }
-  if (nye) {
-    // Hold listen kort: kun de sidste 400 noegler. Den er en huskeseddel,
-    // ikke en historik.
-    setSetting('*', 'push_sendt', [...sendteI].slice(-400).join(','));
+  if (sendteI.size !== foer) {
+    // Hold listen kort: kun de sidste 1000 noegler. Den er en huskeseddel,
+    // ikke en historik - to dages afsnit for hele huset skal kunne vaere der.
+    setSetting('*', 'push_sendt', [...sendteI].slice(-1000).join(','));
   }
   return nye;
 }
@@ -4588,6 +4660,7 @@ const ROUTES = {
   'GET /api/push': (req, res) => {
     const user = requireUser(req, res);
     if (!user) return;
+    huskPushVaert(req);
     sendJson(res, 200, {
       // Den OFFENTLIGE noegle er ikke en hemmelighed - browseren skal have
       // den for at kunne abonnere.
@@ -4608,6 +4681,7 @@ const ROUTES = {
   'POST /api/push/subscribe': async (req, res) => {
     const user = requireUser(req, res);
     if (!user) return;
+    huskPushVaert(req);
     const body = await readJsonBody(req);
     const endpoint = str(body.endpoint, 600);
     const p256dh = str(body.p256dh, 200);
@@ -4651,6 +4725,9 @@ const ROUTES = {
   'POST /api/push/test': async (req, res) => {
     const user = requireUser(req, res);
     if (!user) return;
+    // Ogsaa her: saa retter et tryk paa proeveknappen en installation, hvis
+    // abonnementer blev lavet, foer adressen blev husket.
+    huskPushVaert(req);
     const r = await sendPush(user.id, 'spolen',
       'If you can read this, notifications work.', '/');
     if (r.ingen) {

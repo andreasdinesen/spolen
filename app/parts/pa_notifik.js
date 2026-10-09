@@ -82,7 +82,8 @@ function notifikationAfsnit() {
   return el('div', {}, [
     el('p', { class: 'dim lille', text:
       'A notification when a new episode of something you follow airs. '
-      + 'One per episode — spolen checks every hour but never tells you twice.' }),
+      + 'One per show per day, never before 8:00, and never about an episode '
+      + 'you have already watched.' }),
 
     tilladelse === 'denied'
       ? el('p', { class: 'noeglestatus mangler', text:
@@ -181,7 +182,9 @@ async function proevNotifikation(knap) {
     toast(r.sendt
       ? `Sent to ${r.sendt} device${r.sendt === 1 ? '' : 's'}.`
         + (r.doede ? ` ${r.doede} stale one${r.doede === 1 ? '' : 's'} removed.` : '')
-      : 'The push service accepted nothing — see the server log.', r.sendt ? '' : 'fejl');
+      : 'The push service refused it'
+        + (r.afvist ? ` (${r.afvist.status}${r.afvist.besked ? `: ${r.afvist.besked}` : ''})` : '')
+        + '. See the server log.', r.sendt ? '' : 'fejl');
     await hentPush();
     tegnSide();
   } catch (err) { toast(err.message, 'fejl'); }

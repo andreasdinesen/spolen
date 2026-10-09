@@ -144,3 +144,18 @@ test('VAPID-noegler har den form, browseren kraever', () => {
   assert.equal(off.length, 65, 'applicationServerKey er 65 bytes ukomprimeret');
   assert.equal(off[0], 4, 'ukomprimeret punkt starter med 0x04');
 });
+
+test('service workeren VISER beskeden - push og notificationclick findes', () => {
+  /*
+   * v5 omskrev sw.js og tabte begge lyttere. Krypteringen var rigtig,
+   * push-tjenesten svarede 201, og ingen fik nogensinde en notifikation -
+   * fra v5 til v29, uden et eneste fejlspor. Den her proeve er den billige
+   * vagt mod, at det sker igen.
+   */
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const sw = fs.readFileSync(path.join(__dirname, '..', 'app', 'public', 'sw.js'), 'utf8');
+  assert.match(sw, /addEventListener\(\s*'push'/, 'sw.js mangler push-lytteren');
+  assert.match(sw, /showNotification\(/, 'push-lytteren skal vise en notifikation');
+  assert.match(sw, /addEventListener\(\s*'notificationclick'/, 'sw.js mangler klik-lytteren');
+});

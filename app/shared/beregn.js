@@ -205,7 +205,28 @@ function naesteTjek(status, naesteUdsendelse, nu) {
   return nu + 30 * DAG;
 }
 
+/*
+ * Skal der sendes besked om et afsnit - og hvad skal der staa?
+ *
+ * Afsnit fra I DAG og I GAAR. Kun i dag var den foerste regel, og den tabte
+ * beskeder paa to maader: var serveren nede den dag, eller kom afsnittets
+ * dato foerst fra TMDB dagen efter (det sker), saa var dagen gaaet, foer
+ * jobbet nogensinde saa afsnittet. I gaar er en anden chance - aeldre end
+ * det er ikke "nyt" laengere, og en lavine af gamle beskeder efter en
+ * import eller en lang nedetid er vaerre end ingen.
+ *
+ * Returnerer 'today', 'yesterday' eller null. At hvert afsnit kun meldes
+ * én gang, holder kalderen styr paa.
+ */
+function afsnitsBesked(airDate, idag) {
+  if (!airDate || !idag) return null;
+  const dage = dageMellem(String(airDate), String(idag));
+  if (dage === 0) return 'today';
+  if (dage === 1) return 'yesterday';
+  return null;
+}
+
 module.exports = {
   foer, foerEllerLig, dageMellem, isoDato, sendeorden, relevante,
-  naesteUsete, fremdrift, udsendelsesstatus, naesteTjek,
+  naesteUsete, fremdrift, udsendelsesstatus, naesteTjek, afsnitsBesked,
 };

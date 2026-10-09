@@ -14,7 +14,7 @@
  * skift. Kun de statiske filer gemmes.
  */
 
-const VERSION = 28;               /* stemples af build_rune.py */
+const VERSION = 29;               /* stemples af build_rune.py */
 const CACHE = `spolen-v${VERSION}`;
 
 /* Samme ?v=-stempler som index.html, ellers henter appen én fil fra cachen
@@ -114,5 +114,60 @@ self.addEventListener('fetch', (e) => {
       if (skal) return skal;
       throw new Error('offline');
     }
+  })());
+});
+
+/*
+ * NOTIFIKATIONER.
+ *
+ * De to lyttere herunder er HELE grunden til, at en push-besked bliver til
+ * noget, man kan se. Uden dem modtager browseren beskeden, kaster den vaek
+ * og siger ingenting - serveren faar 201 fra push-tjenesten og tror, at alt
+ * er vel.
+ *
+ * v5 omskrev filen for at rette cachen og tabte dem undervejs. Fra v5 til
+ * v29 kom der derfor ingen notifikationer overhovedet, heller ikke
+ * proeven fra Settings. tests/push.test.js holder nu oeje med, at de findes.
+ *
+ * Safari paa iPhone er strengere endnu: en push, der ikke viser en
+ * notifikation, taeller som en "lydloes" push, og efter nogle af dem
+ * tilbagekalder Safari abonnementet. Derfor vises der ALTID noget - ogsaa
+ * naar beskeden ikke kan laeses.
+ */
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'spolen' }; }
+  // Serveren sender Declarative Web Push (`web_push: 8030`); teksten ligger
+  // saa under `notification`. Viser systemet den selv, kommer vi aldrig hertil.
+  if (d && d.notification) d = { ...d.notification, url: d.notification.navigate };
+  e.waitUntil(self.registration.showNotification(d.title || 'spolen', {
+    body: d.body || '',
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    // Samme tag = en NY besked erstatter den gamle i stedet for at stable
+    // sig op. To afsnit af samme serie paa én dag bliver til én besked.
+    tag: d.tag || d.url || 'spolen',
+    data: { url: d.url || '/' },
+  }));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const maal = new URL((e.notification.data && e.notification.data.url) || '/',
+    self.location.origin).href;
+  e.waitUntil((async () => {
+    /*
+     * Er appen allerede aaben, skal den have FOKUS - ikke aabnes igen.
+     * Ellers ender man med en ny fane hver gang, man trykker paa en besked.
+     */
+    const klienter = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const k of klienter) {
+      if (new URL(k.url).origin === self.location.origin) {
+        await k.focus();
+        if ('navigate' in k) await k.navigate(maal).catch(() => null);
+        return;
+      }
+    }
+    await self.clients.openWindow(maal);
   })());
 });

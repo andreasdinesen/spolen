@@ -781,6 +781,16 @@ async function indlaes() {
     if (harTmdb()) hentninger.unshift(hentKalender());
     await Promise.all(hentninger);
     tegnSide();
+    /*
+     * `?titel=<id>` er notifikationens adresse (sw.js): et tryk paa "ny
+     * afsnit af X" skal lande paa X, ikke paa kalenderen. Parameteren
+     * fjernes bagefter, saa en genindlaesning ikke aabner serien igen.
+     */
+    const viaBesked = new URLSearchParams(location.search).get('titel');
+    if (viaBesked) {
+      history.replaceState(null, '', location.pathname);
+      aabnTitel(viaBesked);
+    }
     tilslutSkrivForAtSoege();
     tilslutNav();
     tilslutServiceWorker();

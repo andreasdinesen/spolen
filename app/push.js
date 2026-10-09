@@ -120,9 +120,14 @@ function krypter(abon, besked, test) {
 /**
  * Sender én push.
  *
- * Returnerer {ok, status, doed}. `doed` betyder, at abonnementet skal
- * SLETTES: 404 og 410 er push-tjenestens maade at sige, at browseren er
- * afmeldt. Bliver de liggende, sender vi til dem for evigt.
+ * Returnerer {ok, status, doed, besked, apnsId}. `doed` betyder, at
+ * abonnementet skal SLETTES: 404 og 410 er push-tjenestens maade at sige, at
+ * browseren er afmeldt. Bliver de liggende, sender vi til dem for evigt.
+ *
+ * `besked` er push-tjenestens EGEN forklaring, naar den afviser. Apple og
+ * Google skriver hvorfor (»BadJwtToken«, »VapidPkHashMismatch«); uden den er
+ * en 403 bare en 403. Indtil v29 smed spolen den vaek, og iPhonen svarede
+ * »accepted nothing« uden et spor af hvorfor (doda laerte det 2026-09).
  */
 function send(abon, besked, vapid, emne) {
   const https = require('node:https');
@@ -130,21 +135,33 @@ function send(abon, besked, vapid, emne) {
   const url = new URL(abon.endpoint);
   return new Promise((resolve) => {
     const req = https.request({
-      host: url.host, path: url.pathname + url.search, method: 'POST',
+      hostname: url.hostname, port: url.port || 443,
+      path: url.pathname + url.search, method: 'POST',
       headers: {
         TTL: '86400',
+        /*
+         * Uden Urgency er hastegraden »normal« (RFC 8030 §5.3), og saa maa
+         * push-tjenesten udsaette leveringen af hensyn til stroemmen - Apple
+         * skriver det selv. doda tilfoejede den under sin iPhone-jagt.
+         */
+        Urgency: 'high',
         'Content-Encoding': 'aes128gcm',
         'Content-Type': 'application/octet-stream',
         'Content-Length': krop.length,
-        Authorization: `vapid t=${vapidToken(abon.endpoint, emne, vapid.privat)}, `
+        // Uden mellemrum efter kommaet - som doda, der virker paa iPhone.
+        Authorization: `vapid t=${vapidToken(abon.endpoint, emne, vapid.privat)},`
           + `k=${vapid.offentlig}`,
       },
     }, (res) => {
-      res.resume();
+      const apnsId = res.headers['apns-id'] || null;
+      let tekst = '';
+      res.on('data', (d) => { if (tekst.length < 400) tekst += d; });
       res.on('end', () => resolve({
         ok: res.statusCode >= 200 && res.statusCode < 300,
         status: res.statusCode,
         doed: res.statusCode === 404 || res.statusCode === 410,
+        besked: String(tekst).trim().slice(0, 200) || null,
+        apnsId,
       }));
     });
     req.on('error', (e) => resolve({ ok: false, status: 0, fejl: e.message, doed: false }));
