@@ -91,28 +91,49 @@ function notifikationAfsnit() {
           + 'them in the browser’s own settings — a website cannot ask again once denied.' })
       : null,
 
+    /*
+     * DENNE enhed foerst - ikke serverens liste.
+     *
+     * Foer v30 sagde siden "1 device subscribed" ud fra serveren alene. Laa
+     * der et abonnement fra et slettet hjemmeskaerms-ikon, saa man proeve-
+     * knappen, Apple svarede 201, og intet kom frem - og "Turn on" blev
+     * aldrig vist, fordi listen ikke var tom (Andreas, 2026-10-09).
+     */
+    n.denne
+      ? el('p', { class: 'noeglestatus har', text: 'On for this device.' })
+      : el('div', {}, [
+          el('p', { class: 'noeglestatus mangler', text:
+            'This device is not subscribed.' }),
+          el('button', {
+            class: 'btn primary', text: 'Turn on for this device',
+            disabled: tilladelse === 'denied',
+            onclick: (e) => tilmeld(e.target),
+          }),
+        ]),
+
     n.abon.length
       ? el('div', {}, [
-          el('p', { class: 'noeglestatus har', text:
-            `${n.abon.length} device${n.abon.length === 1 ? '' : 's'} subscribed.` }),
+          el('p', { class: 'dim lille', text:
+            `${n.abon.length} device${n.abon.length === 1 ? '' : 's'} subscribed in all.` }),
           el('div', { class: 'liste' }, n.abon.map((a) => el('div', { class: 'item-row' }, [
-            el('span', { text: a.service }),
+            el('span', { text: a.service + (a.id === n.denne ? ' (this device)' : '') }),
             el('span', { class: 'dim lille', text: a.lastOkAt
-              ? `last delivered ${new Date(a.lastOkAt * 1000).toISOString().slice(0, 10)}`
-              : 'never delivered yet' }),
+              ? `accepted ${new Date(a.lastOkAt * 1000).toISOString().slice(0, 10)}`
+              : 'never accepted yet' }),
+            a.id === n.denne ? null : el('button', { class: 'btn ghost', text: 'Remove',
+              title: 'Remove this subscription, e.g. from a deleted home-screen icon',
+              onclick: (e) => fjernEnhed(e.target, a.id) }),
           ]))),
           el('div', { class: 'knaprad' }, [
             el('button', { class: 'btn primary', text: 'Send a test notification',
               onclick: (e) => proevNotifikation(e.target) }),
-            el('button', { class: 'btn ghost', text: 'Turn off on this device',
-              onclick: (e) => afmeld(e.target) }),
+            n.denne
+              ? el('button', { class: 'btn ghost', text: 'Turn off on this device',
+                  onclick: (e) => afmeld(e.target) })
+              : null,
           ]),
         ])
-      : el('button', {
-          class: 'btn primary', text: 'Turn on notifications',
-          disabled: tilladelse === 'denied',
-          onclick: (e) => tilmeld(e.target),
-        }),
+      : null,
 
     n.fejl ? el('p', { class: 'noeglestatus mangler', text: n.fejl }) : null,
   ]);
@@ -173,6 +194,47 @@ async function afmeld(knap) {
   } catch (err) { toast(err.message, 'fejl'); knap.disabled = false; }
 }
 
+async function fjernEnhed(knap, id) {
+  knap.disabled = true;
+  try {
+    await api('/push/unsubscribe', { method: 'POST', body: { id } });
+    await hentPush();
+    tegnSide();
+    toast('Subscription removed.');
+  } catch (err) { toast(err.message, 'fejl'); knap.disabled = false; }
+}
+
+/** Samme fingeraftryk som serverens pushId(): sha256(endpoint), 16 hex-tegn. */
+async function pushId(endpoint) {
+  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(endpoint));
+  return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+/*
+ * Hvad er DENNE enheds abonnement - og kender serveren det?
+ *
+ * Har browseren et abonnement, som serveren ikke har (slettet fra en anden
+ * skaerm, eller en tilmelding der fejlede halvvejs), meldes det til igen.
+ * Ellers ville telefonen tro, den var tilmeldt, mens serveren aldrig sendte.
+ */
+async function denneEnhed(abon) {
+  if (pushHindring() || Notification.permission !== 'granted') return null;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const lokal = reg && await reg.pushManager.getSubscription();
+    if (!lokal) return null;
+    const id = await pushId(lokal.endpoint);
+    if (!abon.some((a) => a.id === id)) {
+      const j = lokal.toJSON();
+      await api('/push/subscribe', { method: 'POST', body: {
+        endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
+      } });
+      return { id, gentilmeldt: true };
+    }
+    return { id };
+  } catch { return null; }
+}
+
 async function proevNotifikation(knap) {
   knap.disabled = true;
   const gammel = knap.textContent;
@@ -194,8 +256,11 @@ async function proevNotifikation(knap) {
 
 async function hentPush() {
   try {
-    const r = await api('/push');
+    let r = await api('/push');
+    const d = await denneEnhed(r.subscriptions || []);
+    if (d && d.gentilmeldt) r = await api('/push');
     state.push.abon = r.subscriptions || [];
     state.push.noegle = r.key;
-  } catch { state.push.abon = []; }
+    state.push.denne = d ? d.id : null;
+  } catch { state.push.abon = []; state.push.denne = null; }
 }

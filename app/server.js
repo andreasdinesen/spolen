@@ -3047,6 +3047,11 @@ function pushNyttelast(titel, tekst, url, tag) {
   return { web_push: 8030, notification: n };
 }
 
+/** Fingeraftryk af et endpoint (se GET /api/push). Samme udregning i pa_notifik.js. */
+function pushId(endpoint) {
+  return crypto.createHash('sha256').update(String(endpoint)).digest('hex').slice(0, 16);
+}
+
 function pushAbonnementer(userId) {
   return db.prepare('SELECT endpoint, p256dh, auth FROM push_subs WHERE user_id = ?')
     .all(userId).map((r) => ({ endpoint: r.endpoint, keys: { p256dh: r.p256dh, auth: r.auth } }));
@@ -4668,6 +4673,10 @@ const ROUTES = {
       subscriptions: db.prepare(
         'SELECT endpoint, created_at, last_ok_at FROM push_subs WHERE user_id = ?')
         .all(user.id).map((r) => ({
+          // Et kort fingeraftryk af endpointet. Frontenden regner det samme
+          // af sit EGET abonnement og kan saa sige, hvilken raekke der er
+          // "denne enhed" - uden at endpointet selv forlader serveren.
+          id: pushId(r.endpoint),
           // Kun vaertsnavnet - hele endpointet er en adresse, der kan sende
           // til brugerens telefon, og den skal ikke ligge i et API-svar,
           // der maaske havner i en log.
@@ -4710,8 +4719,18 @@ const ROUTES = {
     if (!user) return;
     const body = await readJsonBody(req);
     const e = str(body.endpoint, 600);
+    const id = str(body.id, 64);
     if (e) db.prepare('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?').run(e, user.id);
-    else db.prepare('DELETE FROM push_subs WHERE user_id = ?').run(user.id);
+    else if (id) {
+      // Fjern én bestemt enhed - ogsaa en, der ikke er DENNE. Et abonnement
+      // fra et slettet hjemmeskaerms-ikon kan ellers kun fjernes fra en
+      // enhed, der ikke findes mere.
+      for (const r of db.prepare('SELECT endpoint FROM push_subs WHERE user_id = ?').all(user.id)) {
+        if (pushId(r.endpoint) === id) {
+          db.prepare('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?').run(r.endpoint, user.id);
+        }
+      }
+    } else db.prepare('DELETE FROM push_subs WHERE user_id = ?').run(user.id);
     sendJson(res, 200, { ok: true });
   },
 

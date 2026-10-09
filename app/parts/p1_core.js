@@ -11,7 +11,7 @@
  * BUMP DEN ALDRIG UNDERVEJS - kun ved en udgivelse, Andreas har sagt ja til
  * (RUNE-ERFARINGER §8). Flere aendringer samles i ÉN version.
  */
-const APP_VERSION = 29;
+const APP_VERSION = 30;
 
 /* ---------------------------------------------------------------- tema */
 
@@ -80,7 +80,7 @@ const state = {
   plex: { url: '', token: '', accountId: '', svar: null, fejl: '', webhook: null, servere: null, manuelToken: '' },
   noegler: { liste: [], ny: null },
   hjaelp: null,
-  push: { abon: [], noegle: '', fejl: '' },
+  push: { abon: [], noegle: '', fejl: '', denne: null },
   settings: {},
   delte: {},
   tmdb: { besked: '' },
